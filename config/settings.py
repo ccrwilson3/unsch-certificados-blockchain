@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-ja8&yc46g*con&ge0&jsx=y+ny5*byyw08q27ps_-g_!dr!gk2
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -142,11 +142,13 @@ AUTH_USER_MODEL = 'certificates.User'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://192.168.100.32:3000",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://192.168.100.32:3000",
 ]
 
 # <--- AGREGA ESTAS DOS LÍNEAS NUEVAS --->
@@ -170,3 +172,10 @@ CORS_ALLOW_METHODS = [
     'POST',
     'PUT',
 ]
+
+# Configuración del Frontend para los códigos QR de los certificados
+FRONTEND_URL = "http://192.168.100.32:3000"  # 👈 Reemplaza con tu IP local real
+
+# 🟢 AGREGAR ESTAS DOS LÍNEAS PARA LOS VOUCHERS Y ARCHIVOS SUBIDOS:
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'

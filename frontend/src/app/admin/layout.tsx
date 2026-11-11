@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
+import { useState, useEffect } from "react";
 
 export default function AdminLayout({
   children,
@@ -10,9 +11,37 @@ export default function AdminLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  
+  // 🟢 Estado para capturar los datos del usuario administrador logueado
+  const [usuarioActual, setUsuarioActual] = useState({
+    nombre: "Administrador",
+    dni: "",
+    rol: "ADMIN"
+  });
+
+  useEffect(() => {
+    const userData = localStorage.getItem("user");
+    if (userData) {
+      try {
+        const parsed = JSON.parse(userData);
+        setUsuarioActual({
+          nombre: parsed.first_name ? `${parsed.first_name} ${parsed.last_name || ""}` : parsed.username || "Administrador",
+          dni: parsed.username || "",
+          rol: "ADMIN"
+        });
+      } catch (e) {
+        setUsuarioActual({
+          nombre: `Usuario (${userData})`,
+          dni: userData,
+          rol: "ADMIN"
+        });
+      }
+    }
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem("user");
+    localStorage.removeItem("token");
     router.push("/login");
   };
 
@@ -60,13 +89,22 @@ export default function AdminLayout({
           </nav>
         </div>
 
-        {/* Cierre de Sesión */}
-        <button
-          onClick={handleLogout}
-          className="w-full text-left px-4 py-2.5 text-sm font-medium text-rose-400 hover:bg-rose-950/30 rounded-xl transition-colors"
-        >
-          🚪 Cerrar Sesión
-        </button>
+        {/* 🟢 SECCIÓN INFERIOR: IDENTIFICACIÓN INSTANTÁNEA + CIERRE DE SESIÓN */}
+        <div className="space-y-4 pt-4 border-t border-slate-800">
+          <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/50">
+            <p className="text-xs font-bold text-slate-200 truncate">{usuarioActual.nombre}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              DNI: <span className="text-slate-300 font-semibold">{usuarioActual.dni}</span>
+            </p>
+          </div>
+
+          <button
+            onClick={handleLogout}
+            className="w-full text-left px-4 py-2.5 text-sm font-medium text-rose-400 hover:bg-rose-950/30 rounded-xl transition-colors"
+          >
+            🚪 Cerrar Sesión
+          </button>
+        </div>
       </aside>
 
       {/* Contenido Principal */}
