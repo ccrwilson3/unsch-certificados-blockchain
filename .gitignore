@@ -37,3 +37,7 @@ venv/
 env/
 db.sqlite3
 .DS_Store
+unsch_cert_db
+media/
+.env
+*.sqlite3
