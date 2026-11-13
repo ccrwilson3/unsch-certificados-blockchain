@@ -33,6 +33,12 @@ contract CertificatesUNSCH {
         emit CertificateIssued(_certHash, block.timestamp);
     }
 
+    function revokeCertificate(bytes32 _certHash) external onlyOwner {
+        require(certificates[_certHash].status == Status.Valid, "Solo se puede revocar un certificado valido");
+        certificates[_certHash].status = Status.Revoked;
+        emit CertificateRevoked(_certHash, block.timestamp);
+    }
+
     function verifyCertificate(bytes32 _certHash) external view returns (bool isValid, uint256 issueTimestamp, string memory statusText) {
         CertificateData memory cert = certificates[_certHash];
         if (cert.status == Status.Valid) {

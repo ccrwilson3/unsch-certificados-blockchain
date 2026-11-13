@@ -60,10 +60,29 @@ function VerificacionContenido() {
     );
   }
 
+  // --- Estado real: base de datos + integridad + blockchain ---
+  const revocado =
+    resultado.status_code === "REVOKED" || resultado.estado_blockchain === "REVOCADO";
+  const valido = resultado.is_valid === true;
+  const enBlockchain =
+    resultado.estado_blockchain === "VALIDO" || resultado.estado_blockchain === "REVOCADO";
+
+  let motivoNoValido = "No se pudo confirmar la autenticidad de este certificado.";
+  if (resultado.estado_blockchain === "NO ENCONTRADO") {
+    motivoNoValido =
+      "El registro existe en la base de datos del INDI, pero su hash no figura en la blockchain.";
+  } else if (resultado.estado_blockchain === "ERROR_CONSULTA") {
+    motivoNoValido =
+      "No se pudo consultar la blockchain en este momento. Intente nuevamente más tarde.";
+  } else if (resultado.hash_integro === false) {
+    motivoNoValido =
+      "Los datos del certificado no coinciden con el hash que fue registrado.";
+  }
+
   return (
     <div className="p-8 space-y-6">
-      {/* --- VALIDACIÓN DE ESTADO (VÁLIDO VS REVOCADO) --- */}
-      {resultado.status_code === 'REVOKED' ? (
+      {/* --- VALIDACIÓN DE ESTADO --- */}
+      {revocado ? (
         <div className="bg-rose-50 border border-rose-200 p-4 rounded-2xl space-y-2">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-rose-600 text-white rounded-xl flex items-center justify-center font-bold text-lg">
@@ -77,11 +96,11 @@ function VerificacionContenido() {
           <div className="mt-3 pt-3 border-t border-rose-200 text-xs text-rose-800 space-y-1">
             <p><strong>Motivo de Revocación:</strong> {resultado.revocation_reason || "No especificado"}</p>
             {resultado.revoked_at && (
-              <p><strong>Fecha de Anulación:</strong> {resultado.revoked_at}</p>
+              <p><strong>Fecha de Anulación:</strong> {new Date(resultado.revoked_at).toLocaleString()}</p>
             )}
           </div>
         </div>
-      ) : (
+      ) : valido ? (
         <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-emerald-600 text-white rounded-xl flex items-center justify-center font-bold text-lg">
@@ -89,12 +108,24 @@ function VerificacionContenido() {
             </div>
             <div>
               <h3 className="text-sm font-bold text-emerald-900">Certificado Válido y Auténtico</h3>
-              <p className="text-xs text-emerald-700">Emitido oficialmente por el Instituto de Idiomas</p>
+              <p className="text-xs text-emerald-700">Emitido por el INDI y verificado en la blockchain</p>
             </div>
           </div>
           <span className="px-3 py-1 bg-emerald-200/60 text-emerald-900 text-xs font-extrabold rounded-full">
             OFICIAL
           </span>
+        </div>
+      ) : (
+        <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl space-y-2">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-amber-500 text-white rounded-xl flex items-center justify-center font-bold text-lg">
+              !
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-amber-900">Certificado No Verificado</h3>
+              <p className="text-xs text-amber-800">{motivoNoValido}</p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -117,8 +148,14 @@ function VerificacionContenido() {
           <span className="font-semibold text-blue-700">{resultado.subnivel || "Nivel I"}</span>
         </div>
         <div className="flex justify-between py-2 border-b border-slate-100 text-sm">
+          <span className="text-slate-400 text-xs">Año de Estudios:</span>
+          <span className="font-semibold text-slate-800">{resultado.anio || "—"}</span>
+        </div>
+        <div className="flex justify-between py-2 border-b border-slate-100 text-sm">
           <span className="text-slate-400 text-xs">Fecha de Emisión:</span>
-          <span className="text-slate-600">{new Date(resultado.fecha_emision).toLocaleDateString()}</span>
+          <span className="text-slate-600">
+            {resultado.fecha_emision ? new Date(resultado.fecha_emision).toLocaleDateString() : "—"}
+          </span>
         </div>
       </div>
 
@@ -126,9 +163,15 @@ function VerificacionContenido() {
       <div className="bg-slate-900 text-slate-300 p-4 rounded-2xl space-y-3 text-xs">
         <div className="flex items-center justify-between text-slate-400 font-semibold">
           <span>Trazabilidad Criptográfica</span>
-          <span className="text-emerald-400 flex items-center gap-1 font-bold">
-            <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span> Registrado en Blockchain
-          </span>
+          {enBlockchain ? (
+            <span className="text-emerald-400 flex items-center gap-1 font-bold">
+              <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span> Registrado en Blockchain
+            </span>
+          ) : (
+            <span className="text-amber-400 flex items-center gap-1 font-bold">
+              <span className="w-2 h-2 bg-amber-400 rounded-full"></span> Sin registro en Blockchain
+            </span>
+          )}
         </div>
 
         <div className="font-mono bg-slate-950 p-2.5 rounded-xl border border-slate-800 break-all text-[11px] text-blue-300 space-y-2">
@@ -145,12 +188,8 @@ function VerificacionContenido() {
         </div>
       </div>
 
-      {/* Botón de Descarga Directa */}
-      {resultado.status_code === 'REVOKED' ? (
-        <div className="w-full py-3 bg-slate-200 text-slate-500 text-center rounded-xl font-semibold text-sm cursor-not-allowed">
-          🚫 Descarga no disponible (Certificado Anulado)
-        </div>
-      ) : (
+      {/* Botón de Descarga Directa: solo para certificados verificados */}
+      {valido ? (
         <a
           href={`http://192.168.100.32:8000/api/certificado/${resultado.codigo}/descargar/`}
           target="_blank"
@@ -159,6 +198,10 @@ function VerificacionContenido() {
         >
           📄 Descargar Copia Oficial en PDF
         </a>
+      ) : (
+        <div className="w-full py-3 bg-slate-200 text-slate-500 text-center rounded-xl font-semibold text-sm cursor-not-allowed">
+          🚫 Descarga no disponible ({revocado ? "Certificado Anulado" : "Certificado No Verificado"})
+        </div>
       )}
     </div>
   );

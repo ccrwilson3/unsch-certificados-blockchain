@@ -1,5 +1,19 @@
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 
+// Cargar las variables del archivo .env de la raíz del proyecto (Node 22+, sin instalar paquetes extra).
+// Las variables que ya existan en el sistema no se sobrescriben.
+if (typeof process.loadEnvFile === "function") {
+  try {
+    process.loadEnvFile(".env");
+  } catch (error) {
+    // Si no hay archivo .env, se usan las variables del sistema.
+  }
+}
+
+// La clave privada vive en el archivo .env (PRIVATE_KEY), nunca en este archivo.
+// Debe ser la cuenta que despliega el contrato y la MISMA con la que firma Django.
+const privateKey = process.env.PRIVATE_KEY;
+
 export default {
   plugins: [hardhatEthers],
   solidity: {
@@ -15,10 +29,8 @@ export default {
   networks: {
     ganache: {
       type: "http",
-      url: "http://127.0.0.1:7545",
-      accounts: [
-        "0x29e444b74e171f90ce40bbd03fda813a34eab744dead51b5cfe9477b2f0d73b0"
-            ],
+      url: process.env.GANACHE_URL || "http://127.0.0.1:7545",
+      accounts: privateKey ? [privateKey] : [],
       gas: 6000000,
       gasPrice: 20000000000
     }

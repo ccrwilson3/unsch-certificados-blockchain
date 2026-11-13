@@ -81,6 +81,30 @@ export default function InscripcionCursosPage() {
     }
   };
 
+  // Descarga la orden de pago con el token de la sesión y la abre en una pestaña nueva
+  const abrirOrdenPdf = async (solicitudId: number) => {
+    // Se abre la pestaña primero (evita bloqueadores de ventanas) y luego se le carga el PDF
+    const ventana = window.open('', '_blank');
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/solicitudes/${solicitudId}/pdf/`);
+      if (!res.ok) {
+        ventana?.close();
+        setMensaje({ tipo: 'error', texto: 'No se pudo abrir la orden de pago.' });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (ventana) {
+        ventana.location.href = url;
+      } else {
+        window.location.href = url;
+      }
+    } catch (err) {
+      ventana?.close();
+      setMensaje({ tipo: 'error', texto: 'Error de red al abrir la orden de pago.' });
+    }
+  };
+
   return (
     <div className="p-8 max-w-5xl mx-auto space-y-6">
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
@@ -156,14 +180,13 @@ export default function InscripcionCursosPage() {
                     </td>
                     <td className="p-3 text-center">
                       {m.status === 'ESPERANDO_PAGO' && (
-                        <a
-                          href={`http://127.0.0.1:8000/api/solicitudes/${m.id}/pdf/`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition"
+                        <button
+                          type="button"
+                          onClick={() => abrirOrdenPdf(m.id)}
+                          className="inline-flex items-center px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
                         >
                           📄 Descargar Orden PDF
-                        </a>
+                        </button>
                       )}
                     </td>
                   </tr>

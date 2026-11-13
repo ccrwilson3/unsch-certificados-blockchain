@@ -1,43 +1,39 @@
-# Node modules
-/node_modules
-
-# Compilation output
-/dist
-
-# pnpm deploy output
-/bundle
-
-# Hardhat Build Artifacts
-/artifacts
-
-# Hardhat compilation (v2) support directory
-/cache
-
-# Typechain output
-/types
-
-# Environment files
+# ---- Secretos y entorno ----
 .env
 .env.*
 !.env.example
 
-# Hardhat coverage reports
-/coverage
+# ---- Datos privados / locales ----
+unsch_cert_db
+db.sqlite3
+*.sqlite3
+media/
+private_media/
+backups/
 
-# Gas snapshot files
-/.gas-snapshot
-
-# Snapshot cheatcodes output
-/snapshots
-
-# Python y Django adicionales
+# ---- Python / Django ----
 *.pyc
 __pycache__/
 venv/
 env/
-db.sqlite3
+
+# ---- Node / Next.js (raíz y frontend) ----
+node_modules/
+.next/
+out/
+dist/
+bundle/
+*.tsbuildinfo
+next-env.d.ts
+
+# ---- Hardhat ----
+/artifacts
+/cache
+/types
+/coverage
+/.gas-snapshot
+/snapshots
+
+# ---- Sistema ----
 .DS_Store
-unsch_cert_db
-media/
-.env
-*.sqlite3
+Thumbs.dbestructura.txt

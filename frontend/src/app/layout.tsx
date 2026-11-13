@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import AuthFetch from "../components/AuthFetch";
 
 export const metadata: Metadata = {
   title: "Certificados Blockchain - INDI UNSCH",
@@ -14,6 +15,7 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body className="bg-slate-50 text-slate-900 antialiased">
+        <AuthFetch />
         {children}
       </body>
     </html>

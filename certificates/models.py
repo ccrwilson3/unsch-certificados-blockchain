@@ -1,9 +1,19 @@
-from django.contrib.auth.models import AbstractUser,Group, Permission, User
+from django.contrib.auth.models import AbstractUser, Group, Permission
+from django.core.files.storage import FileSystemStorage
 from django.db import models
 
 import uuid
 import hashlib
 from django.conf import settings
+
+
+def almacenamiento_privado():
+    """
+    Almacenamiento para archivos que NO deben tener una dirección pública (por ejemplo los
+    vouchers de pago). Solo se entregan a través de la API, comprobando permisos.
+    """
+    return FileSystemStorage(location=settings.PRIVATE_MEDIA_ROOT)
+
 
 class User(AbstractUser):
     class Role(models.TextChoices):
@@ -234,9 +244,16 @@ class Certificate(models.Model):
 
 class CertificateRequest(models.Model):
     class RequestStatus(models.TextChoices):
-        PENDING = 'PENDING', 'Pendiente'
-        APPROVED = 'APPROVED', 'Aprobada'
+        # Etapas del trámite, en orden
+        AWAITING_PAYMENT = 'AWAITING_PAYMENT', 'Esperando pago'
+        PAYMENT_REVIEW = 'PAYMENT_REVIEW', 'Pago en revisión'
+        PAYMENT_OBSERVED = 'PAYMENT_OBSERVED', 'Pago observado'
+        IN_PROCESS = 'IN_PROCESS', 'En trámite'
+        APPROVED = 'APPROVED', 'Certificado emitido'
+        # Rechazada por el INDI
         REJECTED = 'REJECTED', 'Rechazada'
+        # Solicitudes creadas antes del proceso de pago
+        PENDING = 'PENDING', 'Pendiente (solicitud anterior)'
 
     student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='certificate_requests')
     language = models.CharField(max_length=20, choices=Certificate.Language.choices)
@@ -245,10 +262,43 @@ class CertificateRequest(models.Model):
     subnivel = models.CharField(max_length=20, default='Nivel I', blank=True, null=True)
     anio = models.CharField(max_length=10, default='2026', blank=True, null=True)
 
-    status = models.CharField(max_length=15, choices=RequestStatus.choices, default=RequestStatus.PENDING)
+    status = models.CharField(max_length=20, choices=RequestStatus.choices, default=RequestStatus.AWAITING_PAYMENT)
     created_at = models.DateTimeField(auto_now_add=True)
     reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_requests')
     review_comments = models.TextField(blank=True, null=True)
+    curso = models.ForeignKey(
+        'Curso',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='solicitudes_certificado',
+        help_text="Curso aprobado en el que se basa la solicitud",
+    )
+
+    # ---- Pago del certificado ----
+    monto = models.DecimalField(max_digits=8, decimal_places=2, default=0, help_text="Monto a pagar en soles")
+    voucher_pago = models.FileField(
+        storage=almacenamiento_privado,
+        upload_to='vouchers_certificados/',
+        blank=True,
+        null=True,
+        help_text="Voucher de Interbank (archivo privado, sin dirección pública)",
+    )
+    numero_operacion = models.CharField(max_length=30, blank=True, default='', help_text="Número de operación del voucher")
+    pago_enviado_en = models.DateTimeField(null=True, blank=True)
+    pago_validado = models.BooleanField(default=False)
+    pago_revisado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pagos_certificado_revisados',
+    )
+    pago_revisado_en = models.DateTimeField(null=True, blank=True)
+    comentarios_pago = models.TextField(blank=True, null=True, help_text="Motivo de la observación del pago")
+    certificado_enviado_en = models.DateTimeField(
+        null=True, blank=True, help_text="Cuándo se envió el certificado por correo al estudiante"
+    )
 
     def __str__(self):
         return f"Solicitud de {self.student.username} - {self.get_language_display()} ({self.get_level_display()} - {self.subnivel})"

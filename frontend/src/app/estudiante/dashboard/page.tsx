@@ -6,7 +6,8 @@ interface Solicitud {
   id: number;
   curso_nombre: string;
   estado: string;
-  fecha_solicitud: string;
+  fecha?: string;
+  fecha_solicitud?: string;
 }
 
 export default function EstudianteDashboard() {
@@ -79,6 +80,30 @@ export default function EstudianteDashboard() {
       setMensaje({ tipo: 'error', texto: 'Error de red al enviar el comprobante.' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Descarga la orden de pago con el token de la sesión y la abre en una pestaña nueva
+  const abrirOrdenPdf = async (solicitudId: number) => {
+    // Se abre la pestaña primero (evita bloqueadores de ventanas) y luego se le carga el PDF
+    const ventana = window.open('', '_blank');
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/solicitudes/${solicitudId}/pdf/`);
+      if (!res.ok) {
+        ventana?.close();
+        setMensaje({ tipo: 'error', texto: 'No se pudo abrir la orden de pago.' });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (ventana) {
+        ventana.location.href = url;
+      } else {
+        window.location.href = url;
+      }
+    } catch (err) {
+      ventana?.close();
+      setMensaje({ tipo: 'error', texto: 'Error de red al abrir la orden de pago.' });
     }
   };
 
@@ -157,34 +182,36 @@ export default function EstudianteDashboard() {
                 </tr>
               </thead>
               <tbody className="text-sm divide-y">
-                {solicitudes.map(s => (
-                  <tr key={s.id}>
-                    <td className="p-3 font-medium text-slate-800">{s.curso_nombre}</td>
-                    <td className="p-3 text-slate-500 text-xs">{new Date(s.fecha_solicitud).toLocaleDateString()}</td>
-                    <td className="p-3">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                        s.estado === 'APROBADA' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                        'bg-amber-50 text-amber-700 border border-amber-200'
-                      }`}>
-                        {s.estado}
-                      </span>
-                    </td>
-                    <td className="p-3 text-center">
-                      {s.estado === 'ESPERANDO_PAGO' ? (
-                        <a
-                          href={`http://127.0.0.1:8000/api/solicitudes/${s.id}/pdf/`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition"
-                        >
-                          📄 Descargar Orden PDF
-                        </a>
-                      ) : (
-                        <span className="text-xs text-slate-400">Procesado</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {solicitudes.map(s => {
+                  const fecha = s.fecha || s.fecha_solicitud;
+                  return (
+                    <tr key={s.id}>
+                      <td className="p-3 font-medium text-slate-800">{s.curso_nombre}</td>
+                      <td className="p-3 text-slate-500 text-xs">{fecha ? new Date(fecha).toLocaleDateString() : 'N/A'}</td>
+                      <td className="p-3">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                          s.estado === 'APROBADA' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                          'bg-amber-50 text-amber-700 border border-amber-200'
+                        }`}>
+                          {s.estado}
+                        </span>
+                      </td>
+                      <td className="p-3 text-center">
+                        {s.estado === 'ESPERANDO_PAGO' ? (
+                          <button
+                            type="button"
+                            onClick={() => abrirOrdenPdf(s.id)}
+                            className="inline-flex items-center px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
+                          >
+                            📄 Descargar Orden PDF
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-400">Procesado</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
