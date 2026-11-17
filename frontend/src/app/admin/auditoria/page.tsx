@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import Paginador from "../../../components/ui/Paginador";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 
 interface AuditLog {
   id: number;
@@ -115,6 +117,7 @@ export default function AuditoriaPage() {
   const indicePrimerRegistro = indiceUltimoRegistro - registrosPorPagina;
   const logsActuales = logsFiltrados.slice(indicePrimerRegistro, indiceUltimoRegistro);
   const totalPaginas = Math.ceil(logsFiltrados.length / registrosPorPagina) || 1;
+  const pg = { items: logsActuales, pagina: Math.min(paginaActual, totalPaginas), total: totalPaginas, cantidad: logsFiltrados.length, porPagina: registrosPorPagina, irA: setPaginaActual };
 
   // Reiniciar a la página 1 al cambiar filtros
   const handleFiltroChange = (setter: (valor: string) => void, valor: string) => {
@@ -141,7 +144,7 @@ export default function AuditoriaPage() {
           disabled={loading}
           className="px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl hover:bg-slate-100 disabled:opacity-50 transition-colors"
         >
-          🔄 Actualizar
+          <RefreshCw className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Actualizar
         </button>
       </div>
 
@@ -189,7 +192,7 @@ export default function AuditoriaPage() {
         <div className="text-center py-12 text-slate-500">Cargando eventos de auditoría...</div>
       ) : error ? (
         <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm font-medium">
-          ⚠️ {error}
+          <AlertTriangle className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />{error}
         </div>
       ) : logs.length === 0 ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-12 text-center text-slate-500">
@@ -256,31 +259,7 @@ export default function AuditoriaPage() {
             </table>
           </div>
 
-          {/* BARRA DE PAGINACIÓN */}
-          <div className="p-4 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center bg-slate-50/50 gap-2">
-            <span className="text-xs text-slate-500">
-              Mostrando {logsActuales.length > 0 ? indicePrimerRegistro + 1 : 0} a {Math.min(indiceUltimoRegistro, logsFiltrados.length)} de {logsFiltrados.length} registros
-            </span>
-            <div className="space-x-2 flex items-center">
-              <button
-                onClick={() => setPaginaActual((p) => Math.max(p - 1, 1))}
-                disabled={paginaActual === 1}
-                className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-xs font-medium bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 transition-colors"
-              >
-                Anterior
-              </button>
-              <span className="text-xs font-semibold text-slate-600 px-2">
-                {paginaActual} / {totalPaginas}
-              </span>
-              <button
-                onClick={() => setPaginaActual((p) => Math.min(p + 1, totalPaginas))}
-                disabled={paginaActual === totalPaginas}
-                className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-xs font-medium bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-40 transition-colors"
-              >
-                Siguiente
-              </button>
-            </div>
-          </div>
+          <Paginador pg={pg} />
         </div>
       )}
     </main>

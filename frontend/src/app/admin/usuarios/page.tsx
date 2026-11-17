@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Paginador from "../../../components/ui/Paginador";
+import { Dices, KeyRound, Pencil } from "lucide-react";
 
 export default function AdminUsuariosPage() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
@@ -195,6 +197,7 @@ export default function AdminUsuariosPage() {
   const indicePrimero = indiceUltimo - registrosPorPagina;
   const usuariosActuales = usuariosFiltrados.slice(indicePrimero, indiceUltimo);
   const totalPaginas = Math.ceil(usuariosFiltrados.length / registrosPorPagina);
+  const pg = { items: usuariosActuales, pagina: Math.min(paginaActual, Math.max(1, totalPaginas)), total: Math.max(1, totalPaginas), cantidad: usuariosFiltrados.length, porPagina: registrosPorPagina, irA: setPaginaActual };
 
   return (
     <main className="p-8 max-w-6xl mx-auto">
@@ -271,7 +274,7 @@ export default function AdminUsuariosPage() {
                         onClick={() => abrirEditar(u)}
                         className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium transition-colors border border-slate-200"
                       >
-                        Editar Rol ✏️
+                        <Pencil className="w-3 h-3 inline-block -mt-0.5 mr-1" />Editar rol
                       </button>
                       <button
                         onClick={() => {
@@ -280,7 +283,7 @@ export default function AdminUsuariosPage() {
                         }}
                         className="px-2.5 py-1 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg text-xs font-medium transition-colors border border-amber-200"
                       >
-                        Clave 🔑
+                        <KeyRound className="w-3 h-3 inline-block -mt-0.5 mr-1" />Clave
                       </button>
                       <button
                         onClick={() => handleToggleEstado(u.id)}
@@ -299,29 +302,7 @@ export default function AdminUsuariosPage() {
             </table>
           </div>
 
-          {/* PAGINACIÓN */}
-          <div className="p-4 border-t border-slate-200 flex justify-between items-center bg-slate-50/50">
-            <span className="text-xs text-slate-500">
-              Mostrando {indicePrimero + 1} a {Math.min(indiceUltimo, usuariosFiltrados.length)} de {usuariosFiltrados.length} usuarios
-            </span>
-            <div className="space-x-2 flex items-center">
-              <button
-                onClick={() => setPaginaActual((p) => Math.max(p - 1, 1))}
-                disabled={paginaActual === 1}
-                className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white disabled:opacity-40"
-              >
-                Anterior
-              </button>
-              <span className="text-xs font-semibold px-2">{paginaActual} / {totalPaginas || 1}</span>
-              <button
-                onClick={() => setPaginaActual((p) => Math.min(p + 1, totalPaginas))}
-                disabled={paginaActual === totalPaginas || totalPaginas === 0}
-                className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white disabled:opacity-40"
-              >
-                Siguiente
-              </button>
-            </div>
-          </div>
+          <Paginador pg={pg} />
         </div>
       )}
 
@@ -389,7 +370,7 @@ export default function AdminUsuariosPage() {
                     }}
                     className="text-[11px] text-purple-600 hover:underline font-medium"
                   >
-                    Generar aleatoria ⚡
+                    <Dices className="w-3 h-3 inline-block -mt-0.5 mr-1" />Generar aleatoria
                   </button>
                 </div>
                 <input
@@ -515,7 +496,7 @@ export default function AdminUsuariosPage() {
                     }}
                     className="text-[11px] text-amber-600 hover:underline font-medium"
                   >
-                    Generar aleatoria ⚡
+                    <Dices className="w-3 h-3 inline-block -mt-0.5 mr-1" />Generar aleatoria
                   </button>
                 </div>
                 <input

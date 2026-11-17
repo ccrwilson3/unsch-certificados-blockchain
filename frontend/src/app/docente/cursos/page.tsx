@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { AlertTriangle, Check, ClipboardList, GraduationCap, Users } from "lucide-react";
 
 interface Curso {
   id: number;
@@ -170,7 +171,7 @@ export default function PanelDocente() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-8">
-      <h1 className="text-2xl font-bold text-gray-800">👨‍🏫 Panel del Docente - Gestión de Notas y Evaluaciones</h1>
+      <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2.5"><GraduationCap className="w-6 h-6 text-emerald-600 shrink-0" />Panel del Docente - Gestión de Notas y Evaluaciones</h1>
 
       {mensaje && (
         <div
@@ -205,7 +206,7 @@ export default function PanelDocente() {
                 <p className="text-sm text-gray-600">{c.language} - {c.level} ({c.subnivel})</p>
                 <p className="text-xs text-indigo-600 mt-2 font-medium">Período: {c.periodo}</p>
                 <p className="text-xs text-gray-500 mt-1">
-                  👥 {c.total_matriculados} {c.total_matriculados === 1 ? 'estudiante matriculado' : 'estudiantes matriculados'}
+                  <Users className="w-3.5 h-3.5 inline-block -mt-0.5 mr-1" />{c.total_matriculados} {c.total_matriculados === 1 ? 'estudiante matriculado' : 'estudiantes matriculados'}
                 </p>
               </div>
             ))}
@@ -224,7 +225,7 @@ export default function PanelDocente() {
               href={`/docente/notas/${cursoSeleccionado.id}`}
               className="px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-md hover:bg-emerald-700 transition text-center"
             >
-              📝 Registrar notas ({cursoSeleccionado.total_matriculados})
+              <ClipboardList className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Registrar notas ({cursoSeleccionado.total_matriculados})
             </Link>
           </div>
 
@@ -306,7 +307,7 @@ export default function PanelDocente() {
 
             {errorForm && (
               <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-md text-sm font-medium">
-                ⚠️ {errorForm}
+                <AlertTriangle className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />{errorForm}
               </div>
             )}
           </div>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { BarChart3, GraduationCap } from "lucide-react";
 
 const API = 'http://127.0.0.1:8000/api';
 
@@ -57,7 +58,7 @@ export default function NotasEstudiante() {
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-800">📊 Mis Calificaciones y Promedios</h1>
+        <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2.5"><BarChart3 className="w-6 h-6 text-indigo-600 shrink-0" />Mis Calificaciones y Promedios</h1>
         <p className="text-sm text-gray-500 mt-1">
           Aquí ves las notas que registran tus docentes. El promedio final aparece cuando todas las evaluaciones tienen nota.
         </p>
@@ -174,7 +175,7 @@ export default function NotasEstudiante() {
 
                 {aprobado && (
                   <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-md text-sm text-emerald-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <span>🎓 Aprobaste este curso. Ya puedes solicitar tu certificado.</span>
+                    <span><GraduationCap className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Aprobaste este curso. Ya puedes solicitar tu certificado.</span>
                     <Link
                       href="/estudiante/solicitudes"
                       className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-md hover:bg-emerald-700 transition text-center"

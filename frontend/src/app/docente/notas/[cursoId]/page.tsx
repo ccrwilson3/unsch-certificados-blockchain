@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { ClipboardList, Users } from "lucide-react";
 
 const API = 'http://127.0.0.1:8000/api';
 
@@ -164,14 +165,14 @@ function RegistroNotasContenido() {
             ← Volver a Mis Cursos
           </Link>
           <h1 className="text-2xl font-bold text-gray-800 mt-1">
-            📝 Registro de Notas{datos ? `: ${datos.curso.nombre}` : ''}
+            <ClipboardList className="w-6 h-6 inline-block -mt-1 mr-2 text-emerald-600" />Registro de Notas{datos ? `: ${datos.curso.nombre}` : ''}
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             Escala de 0 a 20. El promedio final se calcula con los pesos de cada evaluación.
           </p>
           {datos && (
             <p className="text-xs text-gray-400 mt-1">
-              👥 {datos.estudiantes.length}{' '}
+              <Users className="w-3.5 h-3.5 inline-block -mt-0.5 mr-1" />{datos.estudiantes.length}{' '}
               {datos.estudiantes.length === 1 ? 'estudiante matriculado' : 'estudiantes matriculados'} · Curso #{datos.curso.id}
             </p>
           )}

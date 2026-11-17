@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import Paginador, { usePaginacion } from '../../../components/ui/Paginador';
+import { Check, Download, FileText, GraduationCap, Mail, RefreshCw } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
 
@@ -358,6 +360,7 @@ export default function SolicitudesEstudiantePage() {
   const enTramite = solicitudes.filter((s) => s.status !== "APPROVED");
   const emitidas = solicitudes.filter((s) => s.status === "APPROVED");
   const lista = pestana === "tramite" ? enTramite : emitidas;
+  const pg = usePaginacion(lista, 5, pestana);
 
   // Formulario para subir el voucher (se muestra cuando el estudiante debe pagar)
   const formularioVoucher = (s: Solicitud) => (
@@ -500,7 +503,7 @@ export default function SolicitudesEstudiantePage() {
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <p className="text-sm text-slate-600">
-                📧 Recibirás tu certificado y los avisos del trámite en{" "}
+                <Mail className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Recibirás tu certificado y los avisos del trámite en{" "}
                 <span className="font-semibold text-slate-800">{correo}</span>
               </p>
               <button
@@ -640,7 +643,7 @@ export default function SolicitudesEstudiantePage() {
                 : "Todavía no tienes certificados emitidos."}
             </div>
           ) : (
-            lista.map((s) => {
+            pg.items.map((s) => {
               const estado = ESTADOS[s.status] || { texto: s.status, clase: "bg-slate-50 text-slate-600 border-slate-200" };
               const monto = s.monto && s.monto > 0 ? s.monto : precio;
 
@@ -683,7 +686,7 @@ export default function SolicitudesEstudiantePage() {
                         onClick={() => abrirArchivo(`/solicitudes/${s.id}/orden-pago/`, "No se pudo abrir la orden de pago.")}
                         className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-semibold transition-colors"
                       >
-                        📄 Descargar orden de pago
+                        <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar orden de pago
                       </button>
                       {formularioVoucher(s)}
                     </div>
@@ -704,7 +707,7 @@ export default function SolicitudesEstudiantePage() {
                         onClick={() => abrirArchivo(`/solicitudes/${s.id}/orden-pago/`, "No se pudo abrir la orden de pago.")}
                         className="px-4 py-2 border border-rose-200 bg-white text-rose-700 rounded-xl text-sm font-semibold hover:bg-rose-50 transition-colors"
                       >
-                        📄 Descargar orden de pago
+                        <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar orden de pago
                       </button>
                       {formularioVoucher(s)}
                     </div>
@@ -761,14 +764,14 @@ export default function SolicitudesEstudiantePage() {
                     ) : (
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold text-emerald-900">🎓 Tu certificado está listo</p>
+                          <p className="text-sm font-semibold text-emerald-900"><GraduationCap className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Tu certificado está listo</p>
                           <p className="text-xs text-emerald-800 mt-1">
                             Código <span className="font-mono font-semibold">{s.certificate_code || "—"}</span>. Cualquier
                             persona puede comprobar su autenticidad con ese código o escaneando el QR del documento.
                           </p>
                           {s.certificado_enviado_en && (
                             <p className="text-xs font-semibold text-emerald-900 mt-1">
-                              📧 Te lo enviamos a tu correo el {fecha(s.certificado_enviado_en)}.
+                              <Mail className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Te lo enviamos a tu correo el {fecha(s.certificado_enviado_en)}.
                             </p>
                           )}
                         </div>
@@ -779,7 +782,7 @@ export default function SolicitudesEstudiantePage() {
                               onClick={() => window.open(`${API_URL}/certificado/${s.certificate_code}/descargar/`, "_blank")}
                               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold transition-colors"
                             >
-                              📥 Descargar certificado
+                              <Download className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar certificado
                             </button>
                             <Link
                               href={`/verificar/${s.certificate_code}`}
@@ -807,7 +810,7 @@ export default function SolicitudesEstudiantePage() {
                           onClick={() => handleReenviar(s.id)}
                           className="px-4 py-2 bg-rose-600 text-white font-semibold rounded-xl text-sm hover:bg-rose-700 transition-colors"
                         >
-                          🔄 Reenviar solicitud
+                          <RefreshCw className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Reenviar solicitud
                         </button>
                       ) : (
                         <p className="text-xs text-rose-700">
@@ -827,6 +830,7 @@ export default function SolicitudesEstudiantePage() {
               );
             })
           )}
+          {lista.length > 0 && <Paginador pg={pg} className="rounded-2xl border border-slate-200" />}
         </div>
 
       </div>

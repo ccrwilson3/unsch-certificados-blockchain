@@ -1,13 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Paginador, { usePaginacion } from '../../../components/ui/Paginador';
+import { BookOpen, Pencil, Search } from "lucide-react";
 
-const API = 'http://127.0.0.1:8000/api';
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
 
 interface Curso {
   id: number;
   nombre: string;
   language: string;
+  idioma?: string;
+  nivel?: string;
   level: string;
   subnivel: string;
   periodo: string;
@@ -37,6 +41,13 @@ export default function GestionCursosINDI() {
   const [subnivel, setSubnivel] = useState('Nivel I');
   const [periodo, setPeriodo] = useState('2026-I');
   const [docenteId, setDocenteId] = useState('');
+  const [modalidad, setModalidad] = useState('PRESENCIAL');
+  const [dias, setDias] = useState('L-V');
+  const [horaInicio, setHoraInicio] = useState('08:00');
+  const [horaFin, setHoraFin] = useState('10:00');
+
+  // El horario se arma con un formato único para que el registro pueda agrupar los cursos
+  const horarioArmado = `${dias} ${horaInicio} - ${horaFin}`;
 
   // Estados del modal para editar un curso existente
   const [cursoEditando, setCursoEditando] = useState<Curso | null>(null);
@@ -89,6 +100,11 @@ export default function GestionCursosINDI() {
     setError('');
     setMensajeExito('');
 
+    if (horaFin <= horaInicio) {
+      setError('La hora de fin debe ser posterior a la hora de inicio.');
+      return;
+    }
+
     try {
       const res = await fetch(`${API}/cursos/`, {
         method: 'POST',
@@ -99,13 +115,15 @@ export default function GestionCursosINDI() {
           level,
           subnivel,
           periodo,
+          modalidad,
+          horario: horarioArmado,
           docente_id: docenteId ? parseInt(docenteId) : null,
         }),
       });
 
       const data = await res.json();
       if (res.ok) {
-        setMensajeExito('¡Curso creado, habilitado y docente asignado exitosamente!');
+        setMensajeExito('¡Curso lanzado! Ya aparece en el registro y en la inscripción de los estudiantes.');
         setDocenteId('');
         fetchCursos();
       } else {
@@ -162,9 +180,15 @@ export default function GestionCursosINDI() {
     }
   };
 
+  const [busquedaCurso, setBusquedaCurso] = useState('');
+  const cursosFiltrados = cursos.filter((c) =>
+    `${c.nombre} ${c.periodo} ${c.docente_nombre || ''}`.toLowerCase().includes(busquedaCurso.trim().toLowerCase())
+  );
+  const pg = usePaginacion(cursosFiltrados, 10, busquedaCurso);
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold text-gray-800">📚 Gestión de Cursos y Asignación de Docentes (INDI)</h1>
+      <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2.5"><BookOpen className="w-6 h-6 text-amber-600 shrink-0" />Gestión de Cursos y Asignación de Docentes (INDI)</h1>
 
       {mensajeExito && (
         <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg text-sm font-medium">
@@ -183,7 +207,7 @@ export default function GestionCursosINDI() {
         <div className="border-b pb-3 flex justify-between items-center">
           <h2 className="text-lg font-semibold text-indigo-700">Aperturar Nuevo Curso / Grupo</h2>
           <span className="text-xs bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full font-medium border border-indigo-100">
-            Curso a generar: <strong className="font-semibold">{nombreAutogenerado}</strong>
+            Curso a generar: <strong className="font-semibold">{nombreAutogenerado}</strong> · {modalidad === 'VIRTUAL' ? 'Virtual' : 'Presencial'}
           </span>
         </div>
 
@@ -234,6 +258,36 @@ export default function GestionCursosINDI() {
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Modalidad</label>
+            <select
+              value={modalidad}
+              onChange={(e) => setModalidad(e.target.value)}
+              className="w-full p-2.5 border rounded-md text-sm bg-white"
+            >
+              <option value="PRESENCIAL">Presencial</option>
+              <option value="VIRTUAL">Virtual</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Horario: <span className="font-mono text-indigo-700">{horarioArmado}</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <select value={dias} onChange={(e) => setDias(e.target.value)} className="p-2.5 border rounded-md text-sm bg-white">
+                <option value="L-V">Lunes a viernes</option>
+                <option value="L-M-V">Lun - Mié - Vie</option>
+                <option value="M-J">Mar - Jue</option>
+                <option value="Sábados">Sábados</option>
+                <option value="Domingos">Domingos</option>
+                <option value="Sáb-Dom">Sáb y Dom</option>
+              </select>
+              <input type="time" value={horaInicio} onChange={(e) => setHoraInicio(e.target.value)} required className="p-2.5 border rounded-md text-sm" />
+              <input type="time" value={horaFin} onChange={(e) => setHoraFin(e.target.value)} required className="p-2.5 border rounded-md text-sm" />
+            </div>
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Docente Disponible ({language})
             </label>
@@ -261,7 +315,19 @@ export default function GestionCursosINDI() {
 
       {/* Lista de Cursos Habilitados */}
       <div className="bg-white p-6 rounded-lg shadow-md border border-gray-200">
-        <h2 className="text-lg font-semibold mb-4 text-gray-800">Cursos Habilitados en el Sistema ({cursos.length})</h2>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <h2 className="text-lg font-semibold text-gray-800">Cursos Habilitados en el Sistema ({cursos.length})</h2>
+          <div className="relative w-full sm:w-72">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Buscar por curso, período o docente..."
+              value={busquedaCurso}
+              onChange={(e) => setBusquedaCurso(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
+        </div>
         {loading ? (
           <p className="text-gray-500 text-sm">Cargando cursos...</p>
         ) : cursos.length === 0 ? (
@@ -279,15 +345,15 @@ export default function GestionCursosINDI() {
                 </tr>
               </thead>
               <tbody className="text-sm divide-y">
-                {cursos.map((c) => (
+                {pg.items.map((c) => (
                   <tr key={c.id} className="hover:bg-gray-50 transition">
                     <td className="p-3 text-gray-800 font-medium">
                       <div>{c.nombre}</div>
                       <div className="text-xs text-gray-400 font-normal">
-                        {c.modalidad || '—'} · {c.horario || 'Sin horario'}
+                        {c.modalidad === 'VIRTUAL' ? 'Virtual' : 'Presencial'} · {c.horario || 'Sin horario'}
                       </div>
                     </td>
-                    <td className="p-3 text-gray-600">{c.language} - {c.level} ({c.subnivel})</td>
+                    <td className="p-3 text-gray-600">{c.idioma || c.language} - {c.nivel || c.level} ({c.subnivel})</td>
                     <td className="p-3 text-gray-600 font-mono text-xs">{c.periodo}</td>
                     <td className="p-3">
                       <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${c.docente_id ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
@@ -300,15 +366,19 @@ export default function GestionCursosINDI() {
                         onClick={() => abrirEditar(c)}
                         className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-medium transition border border-gray-200"
                       >
-                        Editar ✏️
+                        <Pencil className="w-3.5 h-3.5 inline-block -mt-0.5 mr-1" />Editar
                       </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {cursosFiltrados.length === 0 && (
+              <p className="p-6 text-center text-sm text-gray-400">Ningún curso coincide con la búsqueda.</p>
+            )}
           </div>
         )}
+        {!loading && cursos.length > 0 && <Paginador pg={pg} acento="amber" className="-mx-6 -mb-6 mt-4 rounded-b-lg" />}
       </div>
 
       {/* MODAL EDITAR CURSO */}
@@ -317,8 +387,8 @@ export default function GestionCursosINDI() {
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-200">
             <h2 className="text-lg font-bold text-slate-800 mb-1">Editar Curso</h2>
             <p className="text-xs text-slate-500 mb-4">
-              {cursoEditando.language} - {cursoEditando.level} ({cursoEditando.subnivel}). Aquí puedes corregir el
-              nombre y asignar o cambiar el docente.
+              {cursoEditando.idioma || cursoEditando.language} - {cursoEditando.nivel || cursoEditando.level} ({cursoEditando.subnivel}).
+              Aquí puedes corregir el nombre, el horario, la modalidad y el docente.
             </p>
 
             {errorEditar && (
@@ -386,7 +456,7 @@ export default function GestionCursosINDI() {
                 <input
                   type="text"
                   maxLength={100}
-                  placeholder="Ej: L-V 08:00 - 10:00"
+                  placeholder="Ej: L-V 08:00 - 10:00 (mismo formato que al crear)"
                   value={editHorario}
                   onChange={(e) => setEditHorario(e.target.value)}
                   className="w-full px-3.5 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"

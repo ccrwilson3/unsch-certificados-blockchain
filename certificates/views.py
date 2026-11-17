@@ -30,7 +30,7 @@ from reportlab.lib.pagesizes import letter
 
 from .models import (
     Certificate, CertificateRequest, AuditLog, Curso, Matricula,
-    Evaluacion, Calificacion, SolicitudMatricula,
+    Evaluacion, Calificacion, SolicitudMatricula, Material,
 )
 from .utils import generar_pdf_certificado
 from .blockchain import (
@@ -1082,68 +1082,126 @@ def resetear_password_api(request, user_id):
 # 🚀 MÓDULO UNIFICADO DE MATRÍCULAS E INSCRIPCIONES INDI
 # ==========================================================
 
+# Costo de la matrícula según el tipo de postulante (en soles)
+PRECIOS_MATRICULA = {'UNSCH': Decimal('90.00'), 'PUBLICO': Decimal('120.00')}
+TIPOS_POSTULANTE = ('PUBLICO', 'UNSCH')
+
+
+def monto_matricula(tipo_postulante):
+    return PRECIOS_MATRICULA.get(str(tipo_postulante or '').upper(), PRECIOS_MATRICULA['PUBLICO'])
+
+
+def _curso_a_dict(c):
+    """Forma única en que la API entrega un curso (la usan el catálogo, el registro y la inscripción)."""
+    return {
+        "id": c.id,
+        "nombre": c.nombre,
+        "language": c.language,
+        "language_code": normalizar_codigo(c.language),
+        "idioma": idioma_legible(c.language),
+        "level": c.level,
+        "nivel": nivel_legible(c.level),
+        "subnivel": c.subnivel,
+        "periodo": c.periodo,
+        "modalidad": c.modalidad,
+        "horario": c.horario or "",
+        "docente_id": c.docente.id if c.docente else None,
+        "docente_nombre": (c.docente.get_full_name() or c.docente.username) if c.docente else "Por asignar",
+    }
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def gestionar_cursos_api(request):
     """
-    GET: Lista todos los cursos activos (público: lo usa el registro de nuevos estudiantes).
-    POST: Permite al rol INDI o ADMIN crear un nuevo curso y asignarle un docente.
+    GET: Lista todos los cursos activos (público: lo usan el registro y la inscripción).
+    POST: Permite al rol INDI o ADMIN lanzar un nuevo curso (idioma, nivel, modalidad, horario, docente).
     """
     if request.method == 'GET':
-        cursos = Curso.objects.filter(activo=True).order_by('-created_at')
-        data = [{
-            "id": c.id,
-            "nombre": c.nombre,
-            "language": c.language,
-            "level": c.level,
-            "subnivel": c.subnivel,
-            "periodo": c.periodo,
-            "modalidad": c.modalidad,
-            "horario": c.horario or "",
-            "docente_id": c.docente.id if c.docente else None,
-            "docente_nombre": c.docente.get_full_name() or c.docente.username if c.docente else "Por asignar",
-        } for c in cursos]
-        return Response(data, status=status.HTTP_200_OK)
+        cursos = Curso.objects.filter(activo=True).select_related('docente').order_by('language', 'modalidad', 'horario', 'subnivel')
+        return Response([_curso_a_dict(c) for c in cursos], status=status.HTTP_200_OK)
 
     # POST: solo Admin o Personal INDI
     user, error = exigir_personal_indi(request)
     if error:
         return error
 
-    nombre = request.data.get('nombre')
-    language = request.data.get('language')
-    level = request.data.get('level')
-    subnivel = request.data.get('subnivel', 'Nivel I')
-    periodo = request.data.get('periodo', '2026-I')
-    docente_id = request.data.get('docente_id')
+    datos = request.data
+    language = normalizar_codigo(datos.get('language'))
+    level = normalizar_codigo(datos.get('level'))
+    subnivel = str(datos.get('subnivel') or 'Nivel I').strip()
+    periodo = str(datos.get('periodo') or '2026-I').strip()
+    modalidad = normalizar_codigo(datos.get('modalidad') or 'PRESENCIAL')
+    horario = str(datos.get('horario') or '').strip()
+    docente_id = datos.get('docente_id')
 
-    if not nombre or not language or not level:
-        return Response({"status": "error", "message": "Nombre, idioma y nivel son obligatorios."}, status=status.HTTP_400_BAD_REQUEST)
+    if language not in Curso.Language.values:
+        return _error("Selecciona un idioma válido.", status.HTTP_400_BAD_REQUEST)
+    if level not in Curso.Level.values:
+        return _error("Selecciona un nivel válido.", status.HTTP_400_BAD_REQUEST)
+    if modalidad not in Curso.Modalidad.values:
+        return _error("La modalidad debe ser Presencial o Virtual.", status.HTTP_400_BAD_REQUEST)
+    if not horario:
+        return _error("Indica el horario del curso (por ejemplo: L-V 08:00 - 10:00).", status.HTTP_400_BAD_REQUEST)
+    if len(horario) > 100 or not periodo or len(periodo) > 20 or len(subnivel) > 20:
+        return _error("Revisa la longitud del horario, período o subnivel.", status.HTTP_400_BAD_REQUEST)
+
+    nombre = str(datos.get('nombre') or '').strip() or f"{idioma_legible(language)} {nivel_legible(level)} - {subnivel}"
+    if len(nombre) > 150:
+        return _error("El nombre del curso es demasiado largo (máximo 150 caracteres).", status.HTTP_400_BAD_REQUEST)
 
     docente = None
-    if docente_id:
-        docente = User.objects.filter(id=docente_id, role='DOCENTE').first()
+    if docente_id not in (None, ''):
+        docente = User.objects.filter(id=docente_id, role='DOCENTE', is_active=True).first()
+        if docente is None:
+            return _error("El docente seleccionado no existe o no está activo.", status.HTTP_400_BAD_REQUEST)
+
+    if Curso.objects.filter(
+        language=language, level=level, subnivel=subnivel, periodo=periodo,
+        modalidad=modalidad, horario=horario, activo=True,
+    ).exists():
+        return _error("Ya existe un curso con el mismo idioma, nivel, período, modalidad y horario.", status.HTTP_400_BAD_REQUEST)
 
     curso = Curso.objects.create(
-        nombre=nombre,
-        language=language,
-        level=level,
-        subnivel=subnivel,
-        periodo=periodo,
-        docente=docente
+        nombre=nombre, language=language, level=level, subnivel=subnivel, periodo=periodo,
+        modalidad=modalidad, horario=horario, docente=docente,
     )
 
     registrar_auditoria(
         user,
         "CREACIÓN DE CURSO",
-        f"Curso '{nombre}' creado (período {periodo}, docente: {docente.username if docente else 'sin asignar'})."
+        f"Curso '{nombre}' creado ({modalidad}, {horario}, período {periodo}, "
+        f"docente: {docente.username if docente else 'sin asignar'})."
     )
 
     return Response({
         "status": "success",
-        "message": "Curso creado y docente asignado correctamente.",
+        "message": "Curso lanzado correctamente. Ya aparece en el registro y la inscripción.",
         "curso_id": curso.id
     }, status=status.HTTP_201_CREATED)
+
+
+def _solicitud_a_dict(s):
+    curso = s.curso
+    return {
+        "id": s.id,
+        "estudiante": s.estudiante.get_full_name() or s.estudiante.username,
+        "estudiante_dni": s.estudiante.username,
+        "curso_id": curso.id if curso else None,
+        "curso_nombre": curso.nombre if curso else "Curso libre",
+        "idioma": idioma_legible(curso.language) if curso else "",
+        "nivel": nivel_legible(curso.level) if curso else "",
+        "subnivel": curso.subnivel if curso else "",
+        "periodo": curso.periodo if curso else "",
+        "modalidad": curso.modalidad if curso else "",
+        "horario": (curso.horario or "") if curso else "",
+        "tipo_postulante": s.tipo_postulante,
+        "monto": float(monto_matricula(s.tipo_postulante)),
+        "status": s.estado,
+        "estado": s.estado,
+        "tiene_voucher": bool(s.boucher_pago),
+        "fecha": s.fecha_solicitud.isoformat() if s.fecha_solicitud else "",
+    }
 
 
 @api_view(['GET', 'POST'])
@@ -1158,46 +1216,60 @@ def gestionar_matriculas_api(request):
         return error
 
     if request.method == 'GET':
+        base = SolicitudMatricula.objects.select_related('estudiante', 'curso')
         if es_personal_indi(user):
-            solicitudes = SolicitudMatricula.objects.all().order_by('-fecha_solicitud')
+            solicitudes = base.order_by('-fecha_solicitud')
         elif es_estudiante(user):
-            solicitudes = SolicitudMatricula.objects.filter(estudiante=user).order_by('-fecha_solicitud')
+            solicitudes = base.filter(estudiante=user).order_by('-fecha_solicitud')
         else:
             return _error("No tienes permisos para ver las matrículas.", status.HTTP_403_FORBIDDEN)
 
-        data = [{
-            "id": s.id,
-            "estudiante": s.estudiante.get_full_name() or s.estudiante.username,
-            "curso_id": s.curso.id if s.curso else None,
-            "curso_nombre": s.curso.nombre if s.curso else "Curso libre",
-            "status": s.estado,
-            "estado": s.estado,
-            "voucher_pago": s.boucher_pago.url if getattr(s, 'boucher_pago', None) else '',
-            "fecha": s.fecha_solicitud.isoformat() if s.fecha_solicitud else ""
-        } for s in solicitudes]
-        return Response(data, status=status.HTTP_200_OK)
+        return Response([_solicitud_a_dict(s) for s in solicitudes], status=status.HTTP_200_OK)
 
     # POST
+    if not es_estudiante(user):
+        return _error("Solo los estudiantes pueden inscribirse a un curso.", status.HTTP_403_FORBIDDEN)
+
     curso_id = request.data.get('curso_id')
     if not curso_id:
-        return Response({"status": "error", "message": "Debe seleccionar un curso."}, status=status.HTTP_400_BAD_REQUEST)
+        return _error("Debe seleccionar un curso.", status.HTTP_400_BAD_REQUEST)
 
-    curso = get_object_or_404(Curso, id=curso_id)
+    curso = Curso.objects.filter(id=curso_id, activo=True).first()
+    if curso is None:
+        return _error("El curso seleccionado no existe o ya no está disponible.", status.HTTP_400_BAD_REQUEST)
 
     if SolicitudMatricula.objects.filter(estudiante=user, curso=curso).exclude(estado='RECHAZADA').exists():
-        return Response({"status": "error", "message": "Ya cuentas con una solicitud activa en este curso."}, status=status.HTTP_400_BAD_REQUEST)
+        return _error("Ya cuentas con una solicitud activa en este curso.", status.HTTP_400_BAD_REQUEST)
+
+    # Tipo de postulante: lo que envía el formulario o, si no, lo guardado en su perfil
+    tipo = str(request.data.get('tipo_postulante') or user.tipo_postulante or 'PUBLICO').upper()
+    if tipo not in TIPOS_POSTULANTE:
+        return _error("Tipo de postulante no válido.", status.HTTP_400_BAD_REQUEST)
+
+    codigo = str(request.data.get('codigo_universitario') or user.codigo_universitario or '').strip()
+    if tipo == 'UNSCH' and not (len(codigo) == 8 and codigo.isdigit()):
+        return _error("El código de estudiante UNSCH debe tener exactamente 8 dígitos.", status.HTTP_400_BAD_REQUEST)
+    if tipo == 'PUBLICO':
+        codigo = ''
+
+    if (user.tipo_postulante, user.codigo_universitario) != (tipo, codigo):
+        user.tipo_postulante = tipo
+        user.codigo_universitario = codigo
+        user.save(update_fields=['tipo_postulante', 'codigo_universitario'])
 
     solicitud = SolicitudMatricula.objects.create(
         estudiante=user,
         curso=curso,
-        tipo_postulante='UNSCH' if getattr(user, 'codigo_universitario', '') else 'PUBLICO',
+        tipo_postulante=tipo,
+        codigo_universitario=codigo,
         estado='ESPERANDO_PAGO'
     )
 
     return Response({
         "status": "success",
-        "message": "Solicitud de matrícula enviada con éxito.",
-        "solicitud_id": solicitud.id
+        "message": "Inscripción registrada. Descarga tu orden de pago y súbela con tu voucher.",
+        "solicitud_id": solicitud.id,
+        "monto": float(monto_matricula(tipo)),
     }, status=status.HTTP_201_CREATED)
 
 
@@ -1262,54 +1334,83 @@ def aprobar_matricula_api(request, matricula_id):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def registrarse_y_generar_orden(request):
-    """Registro público de un nuevo estudiante con su orden de pago."""
+    """Registro público de un nuevo estudiante con su orden de pago. Devuelve la sesión ya iniciada."""
     data = request.data
-    username = data.get('username')  # DNI
-    password = data.get('password')
-    first_name = data.get('first_name')
-    last_name = data.get('last_name')
-    email = data.get('email', '')
-    celular = data.get('celular', '')
-    tipo_postulante = data.get('tipo_postulante', 'PUBLICO')
-    codigo_universitario = data.get('codigo_universitario', '')
+    username = str(data.get('username') or '').strip()  # DNI
+    password = str(data.get('password') or '')
+    first_name = str(data.get('first_name') or '').strip()
+    last_name = str(data.get('last_name') or '').strip()
+    email = str(data.get('email') or '').strip()
+    celular = str(data.get('celular') or '').strip()
+    tipo_postulante = str(data.get('tipo_postulante') or 'PUBLICO').upper()
+    codigo_universitario = str(data.get('codigo_universitario') or '').strip()
     curso_id = data.get('curso_id')
 
-    if User.objects.filter(username=username).exists():
-        return Response({'message': 'El DNI ya se encuentra registrado. Inicia sesión.'}, status=400)
+    if not (len(username) == 8 and username.isdigit()):
+        return _error("El DNI debe tener exactamente 8 dígitos.", 400)
+    if len(password) < 8:
+        return _error("La contraseña debe tener al menos 8 caracteres.", 400)
+    if not first_name or not last_name:
+        return _error("Escribe tus nombres y apellidos.", 400)
+    if not (len(celular) == 9 and celular.isdigit()):
+        return _error("El celular debe tener exactamente 9 dígitos.", 400)
+    try:
+        validate_email(email)
+    except ValidationError:
+        return _error("Escribe un correo electrónico válido: ahí te enviaremos tu certificado.", 400)
+    if tipo_postulante not in TIPOS_POSTULANTE:
+        return _error("Tipo de postulante no válido.", 400)
+    if tipo_postulante == 'UNSCH' and not (len(codigo_universitario) == 8 and codigo_universitario.isdigit()):
+        return _error("El código de estudiante UNSCH debe tener exactamente 8 dígitos.", 400)
+    if tipo_postulante == 'PUBLICO':
+        codigo_universitario = ''
+
+    if User.objects.filter(username=username).exists() or User.objects.filter(dni=username).exists():
+        return _error("El DNI ya se encuentra registrado. Inicia sesión.", 400)
+
+    curso = Curso.objects.filter(id=curso_id, activo=True).first()
+    if curso is None:
+        return _error("El curso seleccionado no existe o ya no está disponible.", 400)
 
     try:
-        curso = Curso.objects.get(id=curso_id, activo=True)
-
         with transaction.atomic():
             user = User.objects.create_user(
                 username=username,
                 password=password,
                 first_name=first_name,
                 last_name=last_name,
-                email=email
+                email=email,
             )
-            if hasattr(user, 'role'):
-                user.role = 'ESTUDIANTE'
-                user.save()
+            user.dni = username
+            user.role = 'STUDENT'
+            user.celular = celular
+            user.tipo_postulante = tipo_postulante
+            user.codigo_universitario = codigo_universitario
+            user.save()
 
             solicitud = SolicitudMatricula.objects.create(
                 estudiante=user,
                 curso=curso,
                 tipo_postulante=tipo_postulante,
-                codigo_universitario=codigo_universitario if tipo_postulante == 'UNSCH' else '',
+                codigo_universitario=codigo_universitario,
                 estado='ESPERANDO_PAGO'
             )
+    except Exception:
+        return _error("No se pudo completar el registro. Inténtalo nuevamente.", 500)
 
-        return Response({
-            'status': 'success',
-            'solicitud_id': solicitud.id,
-            'message': 'Cuenta creada y orden de pago generada con éxito.'
-        }, status=201)
-
-    except Curso.DoesNotExist:
-        return Response({'message': 'El curso seleccionado no existe.'}, status=400)
-    except Exception as e:
-        return Response({'message': f'Error al procesar: {str(e)}'}, status=500)
+    return Response({
+        'status': 'success',
+        'solicitud_id': solicitud.id,
+        'monto': float(monto_matricula(tipo_postulante)),
+        'token': crear_token(user),
+        'user': {
+            'username': user.username,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'role': 'STUDENT',
+        },
+        'message': 'Cuenta creada y orden de pago generada con éxito.'
+    }, status=201)
 
 
 @api_view(['GET'])
@@ -1336,10 +1437,9 @@ def descargar_orden_pago_pdf(request, solicitud_id):
 
     if solicitud.tipo_postulante == 'UNSCH':
         concepto_tasa = "Pensión (Estudiante de la UNSCH)"
-        monto_total = "S/.90.00"
     else:
         concepto_tasa = "Pensión (Público General)"
-        monto_total = "S/.120.00"
+    monto_total = f"S/.{monto_matricula(solicitud.tipo_postulante):.2f}"
 
     buffer = io.BytesIO()
     p = canvas.Canvas(buffer, pagesize=letter)
@@ -1361,9 +1461,9 @@ def descargar_orden_pago_pdf(request, solicitud_id):
         ("DNI", f": {estudiante.username}"),
         ("APELLIDOS Y NOMBRES", f": {estudiante.last_name.upper()}, {estudiante.first_name.upper()}"),
         ("CICLO", f": {curso.periodo}"),
-        ("IDIOMA/NIVEL", f": {curso.language}/{curso.level}-{curso.subnivel}"),
-        ("GRUPO", f': "{getattr(curso, "horario", "L-V 20:00-22:00")}"'),
-        ("SEDE", f": {getattr(curso, 'modalidad', 'Virtual')}"),
+        ("IDIOMA/NIVEL", f": {idioma_legible(curso.language)}/{nivel_legible(curso.level)}-{curso.subnivel}"),
+        ("GRUPO", f': "{curso.horario or "Por definir"}"'),
+        ("SEDE", f": {curso.get_modalidad_display()}"),
         ("TASA DE PAGO", ""),
         (f"  - {concepto_tasa}", ""),
     ]
@@ -1414,7 +1514,8 @@ def descargar_orden_pago_pdf(request, solicitud_id):
 @permission_classes([AllowAny])  # la autenticación se valida dentro
 def subir_voucher_matricula(request):
     """
-    Permite al estudiante subir su voucher de pago vinculándolo a SU solicitud.
+    Permite al estudiante subir (o reemplazar) el voucher de pago de SU solicitud de matrícula.
+    Solo se aceptan JPG, PNG o PDF de hasta 5 MB, y el contenido debe corresponder a la extensión.
     """
     if request.method == 'OPTIONS':
         return Response({}, status=200)
@@ -1423,31 +1524,352 @@ def subir_voucher_matricula(request):
     if error:
         return error
 
-    archivo_voucher = request.FILES.get('voucher_pago') or request.FILES.get('boucher_pago')
+    archivo = request.FILES.get('voucher_pago') or request.FILES.get('boucher_pago')
     solicitud_id = request.data.get('solicitud_id')
 
-    if not archivo_voucher:
-        return Response({'message': 'Debe adjuntar el archivo del voucher.'}, status=400)
-
+    if not archivo:
+        return _error("Debes adjuntar el archivo del voucher.", 400)
     if not solicitud_id:
-        return Response({'message': 'No se especificó la solicitud de matrícula.'}, status=400)
+        return _error("No se especificó la solicitud de matrícula.", 400)
 
+    solicitud = SolicitudMatricula.objects.filter(id=solicitud_id, estudiante=user).first()
+    if solicitud is None:
+        return _error("No se encontró la solicitud de matrícula o no te pertenece.", 404)
+
+    if solicitud.estado not in ('ESPERANDO_PAGO', 'PENDIENTE'):
+        return _error("Esta solicitud ya fue procesada y no admite un nuevo voucher.", 400)
+
+    extension = os.path.splitext(archivo.name)[1].lower()
+    if extension not in EXTENSIONES_VOUCHER:
+        return _error("El voucher debe ser una imagen JPG o PNG, o un PDF.", 400)
+    if archivo.size > TAMANO_MAXIMO_VOUCHER:
+        return _error("El archivo es demasiado grande (máximo 5 MB).", 400)
+    if not _voucher_coincide_con_extension(archivo, extension):
+        return _error("El contenido del archivo no corresponde a un JPG, PNG o PDF válido.", 400)
+
+    # Si ya había un voucher (reemplazo), se elimina el anterior
+    if solicitud.boucher_pago:
+        solicitud.boucher_pago.delete(save=False)
+
+    archivo.name = f"matricula_{solicitud.id}_{uuid.uuid4().hex[:8]}{extension}"
+    solicitud.boucher_pago = archivo
+    solicitud.estado = 'PENDIENTE'
+    solicitud.save()
+
+    return Response({
+        'status': 'success',
+        'message': 'Voucher subido correctamente. Tu matrícula está en revisión por el INDI.'
+    }, status=200)
+
+
+def _entregar_archivo(campo, nombre_descarga=None):
+    """Devuelve el archivo de un FileField privado como respuesta, o None si no existe."""
     try:
-        # Verificamos que la solicitud pertenezca realmente al estudiante autenticado
-        solicitud = SolicitudMatricula.objects.get(id=solicitud_id, estudiante=user)
-        solicitud.boucher_pago = archivo_voucher
-        solicitud.estado = 'PENDIENTE'
-        solicitud.save()
+        archivo = campo.open('rb')
+    except (FileNotFoundError, ValueError, OSError):
+        # Archivos antiguos guardados en la carpeta pública media/
+        ruta = os.path.join(settings.MEDIA_ROOT, str(campo.name))
+        if not os.path.isfile(ruta):
+            return None
+        archivo = open(ruta, 'rb')
+    nombre = os.path.basename(str(campo.name))
+    tipo = mimetypes.guess_type(nombre)[0] or 'application/octet-stream'
+    respuesta = FileResponse(archivo, content_type=tipo)
+    respuesta['Content-Disposition'] = f'inline; filename="{nombre_descarga or nombre}"'
+    respuesta['Cache-Control'] = 'private, no-store'
+    return respuesta
 
-        return Response({
-            'status': 'success',
-            'message': 'Voucher subido correctamente. Su matrícula se encuentra en revisión.'
-        }, status=200)
 
-    except SolicitudMatricula.DoesNotExist:
-        return Response({'message': 'No se encontró la solicitud de matrícula o no te pertenece.'}, status=404)
-    except Exception as e:
-        return Response({'message': f'Error al procesar el archivo: {str(e)}'}, status=400)
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el propietario se validan dentro
+def ver_voucher_matricula_api(request, solicitud_id):
+    """Entrega el voucher de matrícula. Solo el estudiante dueño, el Personal INDI o el Admin."""
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    solicitud = SolicitudMatricula.objects.filter(id=solicitud_id).first()
+    if solicitud is None or not solicitud.boucher_pago:
+        return _error("No hay voucher para esta solicitud.", 404)
+
+    if solicitud.estudiante_id != user.id and not es_personal_indi(user):
+        return _error("No tienes permiso para ver este voucher.", 403)
+
+    respuesta = _entregar_archivo(solicitud.boucher_pago)
+    if respuesta is None:
+        return _error("El archivo del voucher no está disponible. Pide al estudiante que lo suba nuevamente.", 404)
+    return respuesta
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([AllowAny])  # la autenticación se valida dentro
+def mi_perfil_api(request):
+    """
+    Datos de contacto y de postulante del usuario (los que dio al registrarse).
+    GET los devuelve; PUT permite actualizarlos.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    if request.method == 'PUT':
+        d = request.data
+        if 'celular' in d:
+            celular = str(d.get('celular') or '').strip()
+            if celular and not (len(celular) == 9 and celular.isdigit()):
+                return _error("El celular debe tener exactamente 9 dígitos.", 400)
+            user.celular = celular
+        if 'email' in d:
+            email = str(d.get('email') or '').strip()
+            try:
+                validate_email(email)
+            except ValidationError:
+                return _error("Escribe un correo electrónico válido.", 400)
+            user.email = email
+        if 'tipo_postulante' in d:
+            tipo = str(d.get('tipo_postulante') or '').upper()
+            if tipo not in TIPOS_POSTULANTE:
+                return _error("Tipo de postulante no válido.", 400)
+            codigo = str(d.get('codigo_universitario') or '').strip()
+            if tipo == 'UNSCH' and not (len(codigo) == 8 and codigo.isdigit()):
+                return _error("El código de estudiante UNSCH debe tener exactamente 8 dígitos.", 400)
+            user.tipo_postulante = tipo
+            user.codigo_universitario = codigo if tipo == 'UNSCH' else ''
+        user.save()
+
+    return Response({
+        "username": user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "role": 'ADMIN' if user.is_superuser else (rol_de(user) or 'STUDENT'),
+        "email": user.email,
+        "celular": user.celular,
+        "tipo_postulante": user.tipo_postulante,
+        "codigo_universitario": user.codigo_universitario,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])  # la autenticación se valida dentro
+def cambiar_password_api(request):
+    """
+    El usuario cambia su propia contraseña. Exige la contraseña actual.
+    Reglas: mínimo 8 caracteres, no solo números, distinta de la actual y de su DNI.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    actual = str(request.data.get('actual') or '')
+    nueva = str(request.data.get('nueva') or '')
+    confirmar = str(request.data.get('confirmar') or '')
+
+    if not user.check_password(actual):
+        return _error("La contraseña actual no es correcta.", 400)
+    if len(nueva) < 8:
+        return _error("La nueva contraseña debe tener al menos 8 caracteres.", 400)
+    if nueva.isdigit():
+        return _error("La nueva contraseña no puede ser solo números.", 400)
+    if nueva == actual:
+        return _error("La nueva contraseña debe ser distinta de la actual.", 400)
+    if nueva == user.username:
+        return _error("La contraseña no puede ser igual a tu DNI.", 400)
+    if nueva != confirmar:
+        return _error("La confirmación no coincide con la nueva contraseña.", 400)
+
+    user.set_password(nueva)
+    user.save(update_fields=['password'])
+    registrar_auditoria(user, "CAMBIO DE CONTRASEÑA", f"El usuario {user.username} cambió su contraseña.")
+    return Response({"status": "success", "message": "Contraseña actualizada correctamente."})
+
+
+# ==========================================================
+# MATERIALES DE CLASE (el docente publica, el estudiante consulta)
+# ==========================================================
+
+EXTENSIONES_MATERIAL = {
+    '.pdf': (b'%PDF',), '.png': (b'\x89PNG',), '.jpg': (b'\xff\xd8',), '.jpeg': (b'\xff\xd8',),
+    '.docx': (b'PK',), '.pptx': (b'PK',), '.xlsx': (b'PK',),
+    '.doc': (b'\xd0\xcf\x11\xe0',), '.ppt': (b'\xd0\xcf\x11\xe0',), '.xls': (b'\xd0\xcf\x11\xe0',),
+}
+TAMANO_MAXIMO_MATERIAL = 10 * 1024 * 1024  # 10 MB
+
+
+def puede_gestionar_curso(user, curso):
+    """Docente titular del curso, Personal INDI o Admin."""
+    if es_personal_indi(user):
+        return True
+    return rol_de(user) == 'DOCENTE' and curso.docente_id == user.id
+
+
+def puede_ver_curso(user, curso):
+    """Quien gestiona el curso o un estudiante matriculado (aprobado) en él."""
+    if puede_gestionar_curso(user, curso):
+        return True
+    return Matricula.objects.filter(
+        estudiante=user, curso=curso, status=Matricula.MatriculaStatus.APPROVED
+    ).exists()
+
+
+def _material_a_dict(m):
+    return {
+        "id": m.id,
+        "curso_id": m.curso_id,
+        "tipo": m.tipo,
+        "tipo_nombre": m.get_tipo_display(),
+        "titulo": m.titulo,
+        "descripcion": m.descripcion,
+        "enlace": m.enlace,
+        "tiene_archivo": bool(m.archivo),
+        "archivo_nombre": os.path.basename(m.archivo.name) if m.archivo else "",
+        "semana": m.semana,
+        "fecha": m.fecha.isoformat() if m.fecha else None,
+        "publicado_por": (m.publicado_por.get_full_name() or m.publicado_por.username) if m.publicado_por else "",
+        "creado": m.created_at.isoformat(),
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def materiales_curso_api(request, curso_id):
+    """
+    GET: materiales del curso (docente del curso, INDI/Admin o estudiante matriculado).
+    POST: el docente del curso (o INDI/Admin) publica un material: sílabo, enlace de clase,
+          cronograma, material de estudio o aviso. Acepta multipart (con archivo) o JSON.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    curso = get_object_or_404(Curso, id=curso_id)
+
+    if request.method == 'GET':
+        if not puede_ver_curso(user, curso):
+            return _error("No tienes acceso a los materiales de este curso.", 403)
+        materiales = curso.materiales.select_related('publicado_por')
+        return Response([_material_a_dict(m) for m in materiales])
+
+    # POST
+    if not puede_gestionar_curso(user, curso):
+        return _error("Solo el docente de este curso puede publicar materiales.", 403)
+
+    d = request.data
+    titulo = str(d.get('titulo') or '').strip()
+    tipo = str(d.get('tipo') or 'MATERIAL').strip().upper()
+    descripcion = str(d.get('descripcion') or '').strip()
+    enlace = str(d.get('enlace') or '').strip()
+    archivo = request.FILES.get('archivo')
+
+    if not titulo or len(titulo) > 150:
+        return _error("Escribe un título (máximo 150 caracteres).", 400)
+    if tipo not in Material.Tipo.values:
+        return _error("Tipo de material no válido.", 400)
+    if not (enlace or archivo or descripcion):
+        return _error("Agrega un enlace, un archivo o una descripción.", 400)
+
+    if enlace:
+        if not enlace.lower().startswith(('http://', 'https://')) or len(enlace) > 500:
+            return _error("El enlace debe comenzar con http:// o https://.", 400)
+
+    semana = None
+    if str(d.get('semana') or '').strip() not in ('', '0'):
+        try:
+            semana = int(d.get('semana'))
+        except (TypeError, ValueError):
+            return _error("La semana debe ser un número del 1 al 4.", 400)
+        if not 1 <= semana <= 4:
+            return _error("La semana debe estar entre 1 y 4.", 400)
+
+    fecha = None
+    if str(d.get('fecha') or '').strip():
+        try:
+            fecha = date.fromisoformat(str(d.get('fecha')).strip())
+        except ValueError:
+            return _error("La fecha no es válida.", 400)
+
+    if archivo:
+        extension = os.path.splitext(archivo.name)[1].lower()
+        if extension not in EXTENSIONES_MATERIAL:
+            return _error("Formato no permitido. Usa PDF, Word, PowerPoint, Excel o imagen.", 400)
+        if archivo.size > TAMANO_MAXIMO_MATERIAL:
+            return _error("El archivo es demasiado grande (máximo 10 MB).", 400)
+        cabecera = archivo.read(8)
+        archivo.seek(0)
+        if not any(cabecera.startswith(f) for f in EXTENSIONES_MATERIAL[extension]):
+            return _error("El contenido del archivo no corresponde a su formato.", 400)
+        archivo.name = f"curso{curso.id}_{uuid.uuid4().hex[:8]}{extension}"
+
+    material = Material.objects.create(
+        curso=curso, tipo=tipo, titulo=titulo, descripcion=descripcion, enlace=enlace,
+        archivo=archivo, semana=semana, fecha=fecha, publicado_por=user,
+    )
+    return Response({
+        "status": "success",
+        "message": "Material publicado. Tus estudiantes ya pueden verlo.",
+        "material": _material_a_dict(material),
+    }, status=201)
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def eliminar_material_api(request, material_id):
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    material = get_object_or_404(Material.objects.select_related('curso'), id=material_id)
+    if not puede_gestionar_curso(user, material.curso):
+        return _error("No puedes eliminar este material.", 403)
+
+    if material.archivo:
+        material.archivo.delete(save=False)
+    material.delete()
+    return Response({"status": "success", "message": "Material eliminado."})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el acceso al curso se validan dentro
+def archivo_material_api(request, material_id):
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    material = get_object_or_404(Material.objects.select_related('curso'), id=material_id)
+    if not material.archivo:
+        return _error("Este material no tiene archivo.", 404)
+    if not puede_ver_curso(user, material.curso):
+        return _error("No tienes acceso a este archivo.", 403)
+
+    respuesta = _entregar_archivo(material.archivo)
+    if respuesta is None:
+        return _error("El archivo no está disponible.", 404)
+    return respuesta
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def materiales_del_estudiante_api(request):
+    """Cursos en los que el estudiante está matriculado, cada uno con sus materiales."""
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+    if not es_estudiante(user):
+        return _error("Esta sección es solo para estudiantes.", 403)
+
+    matriculas = (
+        Matricula.objects.filter(estudiante=user, status=Matricula.MatriculaStatus.APPROVED)
+        .select_related('curso', 'curso__docente')
+        .order_by('-fecha_matricula')
+    )
+    data = []
+    for m in matriculas:
+        c = m.curso
+        curso = _curso_a_dict(c)
+        curso["materiales"] = [
+            _material_a_dict(x) for x in c.materiales.select_related('publicado_por')
+        ]
+        data.append(curso)
+    return Response(data)
 
 
 @api_view(['GET'])
@@ -1500,7 +1922,9 @@ def cursos_del_docente_api(request):
         "id": c.id,
         "nombre": c.nombre,
         "language": c.language,
+        "idioma": idioma_legible(c.language),
         "level": c.level,
+        "nivel": nivel_legible(c.level),
         "subnivel": c.subnivel,
         "periodo": c.periodo,
         "modalidad": c.modalidad,

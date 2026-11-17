@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AlertTriangle, Check, FileText, Search, ShieldCheck, Upload } from "lucide-react";
 
 export default function ValidarRequisitosPage() {
   const [modoVerificacion, setModoVerificacion] = useState<"texto" | "pdf">("texto");
@@ -103,7 +104,7 @@ export default function ValidarRequisitosPage() {
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
           }`}
         >
-          🔍 Buscar por Código o DNI
+          <Search className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Buscar por Código o DNI
         </button>
         <button
           onClick={() => { setModoVerificacion("pdf"); setResultado(null); setError(""); }}
@@ -113,7 +114,7 @@ export default function ValidarRequisitosPage() {
               : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
           }`}
         >
-          📁 Verificar Subiendo PDF del Estudiante
+          <Upload className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Verificar Subiendo PDF del Estudiante
         </button>
       </div>
 
@@ -133,7 +134,7 @@ export default function ValidarRequisitosPage() {
               disabled={loading}
               className="px-6 py-3 bg-amber-600 text-white rounded-xl font-semibold text-sm hover:bg-amber-700 transition-colors disabled:opacity-50"
             >
-              {loading ? "Verificando..." : "🔍 Validar Requisito"}
+              {loading ? "Verificando..." : <><Search className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Validar Requisito</>}
             </button>
           </form>
         </div>
@@ -151,7 +152,7 @@ export default function ValidarRequisitosPage() {
               disabled={loading}
               className="w-full sm:w-auto px-6 py-3 bg-amber-600 text-white rounded-xl font-semibold text-sm hover:bg-amber-700 transition-colors disabled:opacity-50"
             >
-              {loading ? "Analizando PDF..." : "🛡️ Verificar Integridad del PDF"}
+              {loading ? "Analizando PDF..." : <><ShieldCheck className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Verificar Integridad del PDF</>}
             </button>
           </form>
         </div>
@@ -160,7 +161,7 @@ export default function ValidarRequisitosPage() {
       {/* Resultados de Error */}
       {error && (
         <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm font-medium mb-6">
-          ⚠️ {error}
+          <AlertTriangle className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />{error}
         </div>
       )}
 
@@ -209,7 +210,7 @@ export default function ValidarRequisitosPage() {
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex justify-between items-center">
             <div>
               <p className="text-xs font-bold text-emerald-800">
-                ✓ Requisito de Idioma Cumplido
+                <Check className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Requisito de Idioma Cumplido
               </p>
               <p className="text-xs text-emerald-600 mt-0.5">
                 El estudiante cuenta con certificado auténtico registrado y verificado en el sistema UNSCH.
@@ -221,7 +222,7 @@ export default function ValidarRequisitosPage() {
               rel="noopener noreferrer"
               className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors"
             >
-              📄 Descargar Constancia PDF
+              <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar Constancia PDF
             </a>
           </div>
         </div>

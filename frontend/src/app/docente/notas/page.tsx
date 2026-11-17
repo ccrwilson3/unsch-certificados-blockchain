@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { ClipboardList, Users } from "lucide-react";
 
 const API = 'http://127.0.0.1:8000/api';
 
@@ -42,7 +43,7 @@ export default function NotasIndexPage() {
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-800">📝 Registro de Notas</h1>
+        <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2.5"><ClipboardList className="w-6 h-6 text-emerald-600 shrink-0" />Registro de Notas</h1>
         <p className="text-sm text-gray-500 mt-1">
           Elige el curso para registrar o corregir las notas de tus estudiantes matriculados.
         </p>
@@ -73,7 +74,7 @@ export default function NotasIndexPage() {
               </p>
               <p className="text-xs text-indigo-600 mt-2 font-medium">Período: {c.periodo}</p>
               <p className="text-xs text-gray-500 mt-1">
-                👥 {c.total_matriculados}{' '}
+                <Users className="w-3.5 h-3.5 inline-block -mt-0.5 mr-1" />{c.total_matriculados}{' '}
                 {c.total_matriculados === 1 ? 'estudiante matriculado' : 'estudiantes matriculados'}
               </p>
 

@@ -38,6 +38,15 @@ class User(AbstractUser):
     )
     correo_institucional = models.EmailField(unique=True, null=True, blank=True, help_text="Correo generado automáticamente para el estudiante o docente")
 
+    # Datos que el estudiante da al registrarse (se reutilizan al inscribirse a otros cursos)
+    celular = models.CharField(max_length=15, blank=True, default='')
+    tipo_postulante = models.CharField(
+        max_length=10,
+        choices=[('PUBLICO', 'Público General'), ('UNSCH', 'Estudiante UNSCH')],
+        default='PUBLICO',
+    )
+    codigo_universitario = models.CharField(max_length=20, blank=True, default='')
+
     # Solución al conflicto de grupos y permisos
     groups = models.ManyToManyField(
         Group,
@@ -87,7 +96,13 @@ class SolicitudMatricula(models.Model):
     tipo_postulante = models.CharField(max_length=10, choices=TIPO_POSTULANTE, default='PUBLICO')
     codigo_universitario = models.CharField(max_length=20, blank=True, null=True) # Opcional si es UNSCH
     estado = models.CharField(max_length=20, choices=ESTADO_SOLICITUD, default='ESPERANDO_PAGO')
-    boucher_pago = models.FileField(upload_to='bouchers_matricula/', blank=True, null=True)
+    boucher_pago = models.FileField(
+        storage=almacenamiento_privado,
+        upload_to='bouchers_matricula/',
+        blank=True,
+        null=True,
+        help_text="Voucher de Interbank (archivo privado, sin dirección pública)",
+    )
     fecha_solicitud = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -314,3 +329,39 @@ class AuditLog(models.Model):
     def __str__(self):
         user_str = self.performed_by.username if self.performed_by else "Sistema"
         return f"[{self.timestamp.strftime('%d/%m/%Y %H:%M')}] {user_str} - {self.action}"
+
+
+class Material(models.Model):
+    """Material de trabajo que el docente publica para los estudiantes matriculados en su curso."""
+
+    class Tipo(models.TextChoices):
+        SILABO = 'SILABO', 'Sílabo'
+        ENLACE_CLASE = 'ENLACE_CLASE', 'Enlace de clase'
+        CRONOGRAMA = 'CRONOGRAMA', 'Cronograma de evaluaciones'
+        MATERIAL = 'MATERIAL', 'Material de estudio'
+        AVISO = 'AVISO', 'Aviso'
+
+    curso = models.ForeignKey(Curso, on_delete=models.CASCADE, related_name='materiales')
+    tipo = models.CharField(max_length=20, choices=Tipo.choices, default=Tipo.MATERIAL)
+    titulo = models.CharField(max_length=150)
+    descripcion = models.TextField(blank=True, default='')
+    enlace = models.URLField(max_length=500, blank=True, default='')
+    archivo = models.FileField(
+        storage=almacenamiento_privado,
+        upload_to='materiales/',
+        blank=True,
+        null=True,
+        help_text="Archivo privado: solo lo ven el docente, el INDI y los estudiantes matriculados",
+    )
+    semana = models.PositiveSmallIntegerField(null=True, blank=True, help_text="1 a 4; vacío = material general")
+    fecha = models.DateField(null=True, blank=True, help_text="Fecha de la clase o evaluación")
+    publicado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='materiales_publicados'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['semana', '-created_at']
+
+    def __str__(self):
+        return f"{self.get_tipo_display()}: {self.titulo} ({self.curso.nombre})"

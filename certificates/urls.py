@@ -48,4 +48,13 @@ urlpatterns = [
     path('auth/registro-orden-pago/', views.registrarse_y_generar_orden, name='registrarse_y_generar_orden'),
     path('auth/subir-voucher/', views.subir_voucher_matricula, name='subir_voucher_matricula'),
     path('solicitudes/<int:solicitud_id>/pdf/', views.descargar_orden_pago_pdf, name='descargar_orden_pago_pdf'),
+    path('matriculas/<int:solicitud_id>/voucher/', views.ver_voucher_matricula_api, name='ver_voucher_matricula_api'),
+    path('perfil/', views.mi_perfil_api, name='mi_perfil_api'),
+    path('perfil/password/', views.cambiar_password_api, name='cambiar_password_api'),
+
+    # Materiales de clase
+    path('cursos/<int:curso_id>/materiales/', views.materiales_curso_api, name='materiales_curso_api'),
+    path('materiales/<int:material_id>/', views.eliminar_material_api, name='eliminar_material_api'),
+    path('materiales/<int:material_id>/archivo/', views.archivo_material_api, name='archivo_material_api'),
+    path('estudiante/materiales/', views.materiales_del_estudiante_api, name='materiales_del_estudiante_api'),
 ]

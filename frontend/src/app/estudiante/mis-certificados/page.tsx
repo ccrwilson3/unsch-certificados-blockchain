@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Paginador, { usePaginacion } from '../../../components/ui/Paginador';
+import { Download } from "lucide-react";
 
 interface Certificado {
   id: number;
@@ -69,6 +71,8 @@ export default function MisCertificadosPage() {
     window.open(`${apiUrl}/certificado/${code}/descargar/`, "_blank");
   };
 
+  const pg = usePaginacion(certificados, 5);
+
   return (
     <div className="p-8 max-w-5xl mx-auto space-y-8">
       {/* Cabecera */}
@@ -102,7 +106,7 @@ export default function MisCertificadosPage() {
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {certificados.map((c) => (
+            {pg.items.map((c) => (
               <div key={c.id} className="py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
@@ -125,12 +129,13 @@ export default function MisCertificadosPage() {
                   onClick={() => handleDescargarPDF(c.certificate_code || `INDI-2026-ING-000${c.id}`)}
                   className="px-4 py-2 bg-emerald-600 text-white text-xs font-medium rounded-xl hover:bg-emerald-700 transition-colors flex items-center gap-2 shadow-sm cursor-pointer"
                 >
-                  📥 Descargar PDF Oficial
+                  <Download className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar PDF Oficial
                 </button>
               </div>
             ))}
           </div>
         )}
+        {certificados.length > 0 && <Paginador pg={pg} className="mt-4 rounded-xl border" />}
 
         {mensaje && (
           <p className="text-xs text-center text-rose-600 font-medium">{mensaje}</p>
