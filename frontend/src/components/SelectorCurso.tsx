@@ -13,6 +13,9 @@ export interface CursoCatalogo {
   modalidad: string;
   horario: string;
   docente_nombre: string;
+  cupos?: number | null;
+  cupos_disponibles?: number | null;
+  cupos_agotados?: boolean;
 }
 
 interface Props {
@@ -137,8 +140,8 @@ export default function SelectorCurso({ cursos, value, onChange }: Props) {
   };
 
   // Si solo hay un curso posible, queda elegido solo
-  const unico = disponibles.length === 1 ? String(disponibles[0].id) : "";
-  const seleccionado = disponibles.some((c) => String(c.id) === value) ? value : unico;
+  const unico = disponibles.length === 1 && !disponibles[0].cupos_agotados ? String(disponibles[0].id) : "";
+  const seleccionado = disponibles.some((c) => String(c.id) === value && !c.cupos_agotados) ? value : unico;
 
   useEffect(() => {
     if (unico && value !== unico) onChange(unico);
@@ -198,15 +201,19 @@ export default function SelectorCurso({ cursos, value, onChange }: Props) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {disponibles.map((c) => {
               const activo = seleccionado === String(c.id);
+              const agotado = !!c.cupos_agotados;
               return (
                 <button
                   key={c.id}
                   type="button"
+                  disabled={agotado}
                   onClick={() => onChange(String(c.id))}
-                  className={`text-left p-3.5 rounded-xl border transition cursor-pointer ${
-                    activo
-                      ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600"
-                      : "border-slate-200 bg-white hover:border-indigo-300"
+                  className={`text-left p-3.5 rounded-xl border transition ${
+                    agotado
+                      ? "border-slate-200 bg-slate-50 opacity-70 cursor-not-allowed"
+                      : activo
+                      ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600 cursor-pointer"
+                      : "border-slate-200 bg-white hover:border-indigo-300 cursor-pointer"
                   }`}
                 >
                   <p className="text-sm font-semibold text-slate-800">
@@ -215,6 +222,13 @@ export default function SelectorCurso({ cursos, value, onChange }: Props) {
                   <p className="text-xs text-slate-500 mt-0.5">
                     Período {c.periodo} · Docente: {c.docente_nombre}
                   </p>
+                  {agotado ? (
+                    <p className="text-xs font-semibold text-rose-600 mt-1">Cupos agotados</p>
+                  ) : c.cupos_disponibles != null && c.cupos_disponibles <= 5 ? (
+                    <p className="text-xs font-semibold text-amber-600 mt-1">
+                      {c.cupos_disponibles === 1 ? "Queda 1 cupo" : `Quedan ${c.cupos_disponibles} cupos`}
+                    </p>
+                  ) : null}
                 </button>
               );
             })}

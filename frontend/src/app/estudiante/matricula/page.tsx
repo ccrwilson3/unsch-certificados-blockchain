@@ -18,6 +18,8 @@ interface Inscripcion {
   tiene_voucher: boolean;
   motivo_rechazo?: string;
   fecha: string;
+  reserva_vence?: string;
+  reserva_vencida?: boolean;
 }
 
 const ESTADOS: Record<string, { texto: string; clase: string }> = {
@@ -239,7 +241,18 @@ export default function InscripcionCursosPage() {
                       </td>
                       <td className="p-3 text-slate-600">S/ {m.monto.toFixed(2)}</td>
                       <td className="p-3">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${est.clase}`}>{est.texto}</span>
+                        {m.estado === 'ESPERANDO_PAGO' && m.reserva_vencida ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold border bg-rose-50 text-rose-700 border-rose-200">Plazo vencido</span>
+                        ) : (
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${est.clase}`}>{est.texto}</span>
+                        )}
+                        {m.estado === 'ESPERANDO_PAGO' && m.reserva_vence && (
+                          <p className={`mt-1.5 text-xs max-w-[220px] ${m.reserva_vencida ? 'text-rose-600' : 'text-slate-500'}`}>
+                            {m.reserva_vencida
+                              ? `Tu reserva venció el ${new Date(m.reserva_vence).toLocaleDateString('es-PE')}. Aún puedes subir tu voucher si el curso tiene cupo, o consultar en el INDI.`
+                              : `Paga antes del ${new Date(m.reserva_vence).toLocaleDateString('es-PE')} para mantener tu cupo.`}
+                          </p>
+                        )}
                         {m.estado === 'RECHAZADA' && m.motivo_rechazo && (
                           <p className="mt-1.5 text-xs text-rose-600 max-w-[220px]">Motivo: {m.motivo_rechazo}</p>
                         )}

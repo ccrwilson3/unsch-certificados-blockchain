@@ -33,7 +33,7 @@ from reportlab.lib.pagesizes import letter
 
 from .models import (
     Certificate, CertificateRequest, AuditLog, Curso, Matricula,
-    Evaluacion, Calificacion, SolicitudMatricula, Material,
+    Evaluacion, Calificacion, SolicitudMatricula, Material, Asistencia,
 )
 from .utils import generar_pdf_certificado
 from .blockchain import (
@@ -1094,9 +1094,64 @@ def monto_matricula(tipo_postulante):
     return PRECIOS_MATRICULA.get(str(tipo_postulante or '').upper(), PRECIOS_MATRICULA['PUBLICO'])
 
 
+def cupos_ocupados(curso):
+    """
+    Vacantes que el curso ya tiene comprometidas: matriculados aprobados + solicitudes con voucher en
+    revisión + órdenes sin pagar cuyo plazo (5 días) sigue vigente. Una reserva vencida no ocupa cupo.
+    """
+    aprobados = Matricula.objects.filter(curso=curso, status=Matricula.MatriculaStatus.APPROVED).count()
+    pendientes = SolicitudMatricula.objects.filter(curso=curso, estado='PENDIENTE').count()
+    reservas = sum(
+        1 for s in SolicitudMatricula.objects.filter(curso=curso, estado='ESPERANDO_PAGO')
+        if not s.reserva_vencida
+    )
+    return aprobados + pendientes + reservas
+
+
+def cupos_info(curso):
+    """(ocupados, disponibles) — disponibles es None si el curso no tiene límite."""
+    ocupados = cupos_ocupados(curso)
+    if curso.cupos is None:
+        return ocupados, None
+    return ocupados, max(curso.cupos - ocupados, 0)
+
+
+def hay_cupo(curso):
+    return curso.cupos is None or cupos_ocupados(curso) < curso.cupos
+
+
+def _leer_cupos(valor):
+    """Devuelve (cupos|None, error). Vacío = sin límite."""
+    if valor in (None, ''):
+        return None, None
+    try:
+        n = int(valor)
+    except (TypeError, ValueError):
+        return None, "Los cupos deben ser un número entero (o déjalo vacío si no hay límite)."
+    if n < 1 or n > 500:
+        return None, "Los cupos deben estar entre 1 y 500."
+    return n, None
+
+
+def _leer_faltas(valor):
+    try:
+        n = int(valor)
+    except (TypeError, ValueError):
+        return None, "Las faltas permitidas deben ser un número entero."
+    if n < 0 or n > 10:
+        return None, "Las faltas permitidas deben estar entre 0 y 10."
+    return n, None
+
+
 def _curso_a_dict(c):
     """Forma única en que la API entrega un curso (la usan el catálogo, el registro y la inscripción)."""
+    ocupados, disponibles = cupos_info(c)
     return {
+        "cupos": c.cupos,
+        "cupos_ocupados": ocupados,
+        "cupos_disponibles": disponibles,
+        "cupos_agotados": disponibles == 0,
+        "faltas_permitidas": c.faltas_permitidas,
         "id": c.id,
         "nombre": c.nombre,
         "language": c.language,
@@ -1137,6 +1192,12 @@ def gestionar_cursos_api(request):
     modalidad = normalizar_codigo(datos.get('modalidad') or 'PRESENCIAL')
     horario = str(datos.get('horario') or '').strip()
     docente_id = datos.get('docente_id')
+    cupos, err = _leer_cupos(datos.get('cupos'))
+    if err:
+        return _error(err, status.HTTP_400_BAD_REQUEST)
+    faltas, err = _leer_faltas(datos.get('faltas_permitidas', 2))
+    if err:
+        return _error(err, status.HTTP_400_BAD_REQUEST)
 
     if language not in Curso.Language.values:
         return _error("Selecciona un idioma válido.", status.HTTP_400_BAD_REQUEST)
@@ -1168,13 +1229,15 @@ def gestionar_cursos_api(request):
     curso = Curso.objects.create(
         nombre=nombre, language=language, level=level, subnivel=subnivel, periodo=periodo,
         modalidad=modalidad, horario=horario, docente=docente,
+        cupos=cupos, faltas_permitidas=faltas,
     )
 
     registrar_auditoria(
         user,
         "CREACIÓN DE CURSO",
         f"Curso '{nombre}' creado ({modalidad}, {horario}, período {periodo}, "
-        f"docente: {docente.username if docente else 'sin asignar'})."
+        f"docente: {docente.username if docente else 'sin asignar'}, "
+        f"cupos: {cupos if cupos is not None else 'sin límite'}, faltas permitidas: {faltas})."
     )
 
     return Response({
@@ -1205,6 +1268,9 @@ def _solicitud_a_dict(s):
         "tiene_voucher": bool(s.boucher_pago),
         "motivo_rechazo": s.motivo_rechazo if s.estado == 'RECHAZADA' else "",
         "fecha": s.fecha_solicitud.isoformat() if s.fecha_solicitud else "",
+        "reserva_vence": s.vence_en.isoformat() if (s.estado == 'ESPERANDO_PAGO' and s.vence_en) else "",
+        "reserva_vencida": s.reserva_vencida,
+        "curso_cupos_agotados": bool(curso and curso.cupos is not None and not hay_cupo(curso)),
     }
 
 
@@ -1244,6 +1310,8 @@ def gestionar_matriculas_api(request):
 
     if SolicitudMatricula.objects.filter(estudiante=user, curso=curso).exclude(estado='RECHAZADA').exists():
         return _error("Ya cuentas con una solicitud activa en este curso.", status.HTTP_400_BAD_REQUEST)
+    if not hay_cupo(curso):
+        return _error("Los cupos de este curso están agotados. Elige otro horario o consulta en el INDI.", status.HTTP_400_BAD_REQUEST)
 
     # Tipo de postulante: lo que envía el formulario o, si no, lo guardado en su perfil
     tipo = str(request.data.get('tipo_postulante') or user.tipo_postulante or 'PUBLICO').upper()
@@ -1324,9 +1392,13 @@ def aprobar_matricula_api(request, matricula_id):
             f"{detalle_base} aprobada. El estudiante quedó matriculado en el curso."
         )
         _, nota_correo = notificar_matricula_aprobada(solicitud)
+        aviso = ""
+        c = solicitud.curso
+        if c and c.cupos is not None and cupos_ocupados(c) > c.cupos:
+            aviso = f" Atención: el curso ahora tiene más matriculados que sus {c.cupos} cupos (aprobado como excepción)."
         return Response({
             "status": "success",
-            "message": f"Matrícula aprobada. El estudiante quedó matriculado en el curso. {nota_correo}"
+            "message": f"Matrícula aprobada. El estudiante quedó matriculado en el curso.{aviso} {nota_correo}"
         })
 
     # Rechazo: se exige el motivo para que el estudiante sepa qué corregir
@@ -1384,6 +1456,8 @@ def registrarse_y_generar_orden(request):
     curso = Curso.objects.filter(id=curso_id, activo=True).first()
     if curso is None:
         return _error("El curso seleccionado no existe o ya no está disponible.", 400)
+    if not hay_cupo(curso):
+        return _error("Los cupos de este curso están agotados. Elige otro horario o consulta en el INDI.", 400)
 
     try:
         with transaction.atomic():
@@ -1556,6 +1630,14 @@ def subir_voucher_matricula(request):
     motivo_anterior = solicitud.motivo_rechazo
     if era_rechazada and (solicitud.curso is None or not solicitud.curso.activo):
         return _error("Ese curso ya no está disponible. Elige otro desde 'Inscripción a Cursos'.", 400)
+
+    # Una reserva vencida (o una solicitud rechazada) ya no tiene cupo guardado: solo sigue si aún queda uno
+    if (solicitud.reserva_vencida or era_rechazada) and solicitud.curso and not hay_cupo(solicitud.curso):
+        if solicitud.reserva_vencida:
+            return _error(
+                "El plazo de 5 días de tu orden de pago venció y el curso ya no tiene cupos. "
+                "Consulta en el INDI o inscríbete en otro horario.", 400)
+        return _error("El curso ya no tiene cupos disponibles. Consulta en el INDI o elige otro horario.", 400)
 
     extension = os.path.splitext(archivo.name)[1].lower()
     if extension not in EXTENSIONES_VOUCHER:
@@ -2001,6 +2083,8 @@ def cursos_del_docente_api(request):
         "modalidad": c.modalidad,
         "horario": c.horario or "",
         "total_matriculados": c.total_matriculados,
+        "cupos": c.cupos,
+        "faltas_permitidas": c.faltas_permitidas,
     } for c in cursos]
 
     return Response(data, status=status.HTTP_200_OK)
@@ -2444,6 +2528,22 @@ def editar_curso_api(request, curso_id):
         if nuevo_horario != curso.horario:
             cambios.append(f"horario: {curso.horario or 'sin horario'} → {nuevo_horario or 'sin horario'}")
             curso.horario = nuevo_horario
+
+    if 'cupos' in datos:
+        cupos, err = _leer_cupos(datos.get('cupos'))
+        if err:
+            return _error(err, status.HTTP_400_BAD_REQUEST)
+        if cupos != curso.cupos:
+            cambios.append(f"cupos: {curso.cupos if curso.cupos is not None else 'sin límite'} → {cupos if cupos is not None else 'sin límite'}")
+            curso.cupos = cupos
+
+    if 'faltas_permitidas' in datos:
+        faltas, err = _leer_faltas(datos.get('faltas_permitidas'))
+        if err:
+            return _error(err, status.HTTP_400_BAD_REQUEST)
+        if faltas != curso.faltas_permitidas:
+            cambios.append(f"faltas permitidas: {curso.faltas_permitidas} → {faltas}")
+            curso.faltas_permitidas = faltas
 
     if 'docente_id' in datos:
         docente_id = datos.get('docente_id')
@@ -3363,3 +3463,366 @@ def mi_correo_api(request):
         "correo": correo,
         "tiene_correo": True,
     }, status=status.HTTP_200_OK)
+
+
+# ==========================================================
+# VENCIMIENTO DE LA RESERVA (ampliar plazo)
+# ==========================================================
+
+@api_view(['POST'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def ampliar_reserva_api(request, solicitud_id):
+    """
+    El INDI amplía el plazo de pago de una orden aún sin pagar (excepciones).
+    Cuerpo: {"dias": 5}  (1 a 30). El nuevo plazo se cuenta desde hoy o desde el vencimiento, lo que sea mayor.
+    """
+    user, error = exigir_personal_indi(request)
+    if error:
+        return error
+
+    solicitud = get_object_or_404(SolicitudMatricula, id=solicitud_id)
+    if solicitud.estado != 'ESPERANDO_PAGO':
+        return _error("Solo se puede ampliar el plazo de una orden que aún no tiene voucher.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        dias = int(request.data.get('dias', SolicitudMatricula.RESERVA_DIAS))
+    except (TypeError, ValueError):
+        return _error("Indica los días como un número entero.", status.HTTP_400_BAD_REQUEST)
+    if dias < 1 or dias > 30:
+        return _error("El plazo se puede ampliar entre 1 y 30 días.", status.HTTP_400_BAD_REQUEST)
+
+    base = max(timezone.now(), solicitud.vence_en or timezone.now())
+    solicitud.reserva_hasta = base + timedelta(days=dias)
+    solicitud.save(update_fields=['reserva_hasta'])
+    registrar_auditoria(
+        user, "AMPLIACIÓN DE PLAZO DE RESERVA",
+        f"Solicitud de matrícula #{solicitud.id} ({solicitud.estudiante.username}): plazo ampliado {dias} día(s), "
+        f"vence el {timezone.localtime(solicitud.reserva_hasta).strftime('%d/%m/%Y')}."
+    )
+    return Response({
+        "status": "success",
+        "message": f"Plazo ampliado {dias} día(s). Vence el {timezone.localtime(solicitud.reserva_hasta).strftime('%d/%m/%Y')}.",
+        "reserva_vence": solicitud.reserva_hasta.isoformat(),
+    })
+
+
+# ==========================================================
+# ASISTENCIA
+# ==========================================================
+
+def _riesgo_asistencia(faltas, permitidas):
+    """AL_DIA / ATENCION (llegó al límite de faltas toleradas) / EN_RIESGO (superó el límite)."""
+    if faltas > permitidas:
+        return 'EN_RIESGO'
+    if faltas > 0 and faltas == permitidas:
+        return 'ATENCION'
+    return 'AL_DIA'
+
+
+_ORDEN_RIESGO = {'AL_DIA': 0, 'ATENCION': 1, 'EN_RIESGO': 2}
+
+
+def _resumen_asistencia(curso, estudiante_ids):
+    """Resumen por estudiante: presentes, faltas sin justificar, justificadas, % y riesgo."""
+    clases = (Asistencia.objects.filter(curso=curso).values('fecha').distinct().count())
+    conteo = {}
+    for a in Asistencia.objects.filter(curso=curso, estudiante_id__in=estudiante_ids):
+        c = conteo.setdefault(a.estudiante_id, {'PRESENTE': 0, 'FALTA': 0, 'JUSTIFICADA': 0})
+        c[a.estado] += 1
+    resumen = {}
+    for eid in estudiante_ids:
+        c = conteo.get(eid, {'PRESENTE': 0, 'FALTA': 0, 'JUSTIFICADA': 0})
+        total = c['PRESENTE'] + c['FALTA'] + c['JUSTIFICADA']
+        resumen[eid] = {
+            "presentes": c['PRESENTE'],
+            "faltas": c['FALTA'],
+            "justificadas": c['JUSTIFICADA'],
+            "registradas": total,
+            "porcentaje": round(100 * (c['PRESENTE'] + c['JUSTIFICADA']) / total) if total else None,
+            "riesgo": _riesgo_asistencia(c['FALTA'], curso.faltas_permitidas),
+        }
+    return clases, resumen
+
+
+def _aviso_asistencia(estudiante, curso, faltas, riesgo):
+    """Arma el correo de aviso (o None si no corresponde)."""
+    destinatario = destinatarios_del_usuario(estudiante)
+    if not destinatario or riesgo == 'AL_DIA':
+        return None
+    permitidas = curso.faltas_permitidas
+    if riesgo == 'ATENCION':
+        asunto = f"Aviso de asistencia: llegaste al límite de faltas en {curso.nombre}"
+        titulo = "Llegaste al límite de faltas"
+        parrafos = [
+            f"Hola {_nombre(estudiante)},",
+            f"Tienes {faltas} falta(s) sin justificar en {curso.nombre}. El INDI tolera {permitidas}.",
+            "Una falta más sin justificar te pondría en riesgo de desaprobar el curso. "
+            "Si tuviste un motivo, preséntalo a tu docente o al INDI.",
+        ]
+    else:
+        asunto = f"Posible desaprobación por inasistencia en {curso.nombre}"
+        titulo = "Posible desaprobación por inasistencia"
+        parrafos = [
+            f"Hola {_nombre(estudiante)},",
+            f"Superaste las {permitidas} faltas toleradas en {curso.nombre} (tienes {faltas} sin justificar).",
+            "Si no presentas una justificación, podrías desaprobar el curso por inasistencia. "
+            "Comunícate con tu docente o con el INDI lo antes posible.",
+        ]
+    return (destinatario, asunto, titulo, parrafos, ("Ver mi asistencia", _enlace_portal('/estudiante/asistencia')))
+
+
+def _fecha_asistencia(texto):
+    try:
+        return datetime.strptime(str(texto), '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def asistencia_curso_api(request, curso_id):
+    """
+    Asistencia de un curso, por día de clase. Solo el docente del curso, el Personal INDI o el Admin.
+      GET ?fecha=AAAA-MM-DD -> estudiantes matriculados con su estado ese día y su resumen acumulado
+      PUT {"fecha": "AAAA-MM-DD", "registros": [{"estudiante_id", "estado", "observacion"}]}
+          estado: PRESENTE | FALTA | JUSTIFICADA (la justificada exige una observación).
+    Al pasar el límite de faltas sin justificar, se avisa al estudiante por correo.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+    curso = get_object_or_404(Curso, id=curso_id)
+    if not ((rol_de(user) == 'DOCENTE' and curso.docente_id == user.id) or es_personal_indi(user)):
+        return _error("No tienes permisos sobre este curso.", status.HTTP_403_FORBIDDEN)
+
+    hoy = timezone.localdate()
+    matriculas = list(
+        Matricula.objects.filter(curso=curso, status=Matricula.MatriculaStatus.APPROVED)
+        .select_related('estudiante').order_by('estudiante__last_name', 'estudiante__first_name')
+    )
+    ids = [m.estudiante_id for m in matriculas]
+
+    if request.method == 'PUT':
+        fecha = _fecha_asistencia(request.data.get('fecha'))
+        if fecha is None:
+            return _error("Indica la fecha de la clase (AAAA-MM-DD).", status.HTTP_400_BAD_REQUEST)
+        if fecha > hoy:
+            return _error("No se puede registrar asistencia de una fecha futura.", status.HTTP_400_BAD_REQUEST)
+        registros = request.data.get('registros')
+        if not isinstance(registros, list) or not registros:
+            return _error("No se enviaron registros de asistencia.", status.HTTP_400_BAD_REQUEST)
+
+        limpios = {}
+        for item in registros:
+            try:
+                eid = int(item.get('estudiante_id'))
+            except (TypeError, ValueError, AttributeError):
+                return _error("Registro de asistencia no válido.", status.HTTP_400_BAD_REQUEST)
+            if eid not in ids:
+                return _error("Hay un estudiante que no está matriculado en este curso.", status.HTTP_400_BAD_REQUEST)
+            estado = str(item.get('estado') or '').upper()
+            if estado not in Asistencia.Estado.values:
+                return _error("Estado de asistencia no válido.", status.HTTP_400_BAD_REQUEST)
+            obs = str(item.get('observacion') or '').strip()
+            if len(obs) > 200:
+                return _error("La observación es demasiado larga (máximo 200 caracteres).", status.HTTP_400_BAD_REQUEST)
+            if estado == 'JUSTIFICADA' and len(obs) < 3:
+                return _error("Para marcar una falta como justificada escribe el motivo.", status.HTTP_400_BAD_REQUEST)
+            limpios[eid] = (estado, obs)
+
+        _, antes = _resumen_asistencia(curso, list(limpios))
+        with transaction.atomic():
+            for eid, (estado, obs) in limpios.items():
+                Asistencia.objects.update_or_create(
+                    curso=curso, estudiante_id=eid, fecha=fecha,
+                    defaults={'estado': estado, 'observacion': obs, 'registrado_por': user},
+                )
+        _, despues = _resumen_asistencia(curso, list(limpios))
+
+        lote = []
+        alumnos = {m.estudiante_id: m.estudiante for m in matriculas}
+        for eid in limpios:
+            if _ORDEN_RIESGO[despues[eid]['riesgo']] > _ORDEN_RIESGO[antes[eid]['riesgo']]:
+                aviso = _aviso_asistencia(alumnos[eid], curso, despues[eid]['faltas'], despues[eid]['riesgo'])
+                if aviso:
+                    lote.append(aviso)
+        enviar_lote(lote)
+
+        registrar_auditoria(
+            user, "REGISTRO DE ASISTENCIA",
+            f"Curso #{curso.id} ({curso.nombre}), clase del {fecha.strftime('%d/%m/%Y')}: "
+            f"{len(limpios)} estudiante(s) registrados, {len(lote)} aviso(s) por faltas enviados."
+        )
+        en_riesgo = sum(1 for e in limpios if despues[e]['riesgo'] == 'EN_RIESGO')
+        return Response({
+            "status": "success",
+            "message": f"Asistencia del {fecha.strftime('%d/%m/%Y')} guardada."
+                       + (f" Se avisó a {len(lote)} estudiante(s) por sus faltas." if lote else ""),
+            "avisos": len(lote),
+            "en_riesgo": en_riesgo,
+        })
+
+    # GET
+    fecha = _fecha_asistencia(request.query_params.get('fecha')) or hoy
+    clases, resumen = _resumen_asistencia(curso, ids)
+    del_dia = {a.estudiante_id: a for a in Asistencia.objects.filter(curso=curso, fecha=fecha)}
+    fechas = [f.isoformat() for f in
+              Asistencia.objects.filter(curso=curso).values_list('fecha', flat=True).distinct().order_by('-fecha')]
+
+    estudiantes = []
+    for m in matriculas:
+        e = m.estudiante
+        a = del_dia.get(e.id)
+        estudiantes.append({
+            "id": e.id,
+            "nombre": e.get_full_name() or e.username,
+            "dni": e.username,
+            "estado": a.estado if a else None,
+            "observacion": a.observacion if a else "",
+            **resumen[e.id],
+        })
+    return Response({
+        "curso": {"id": curso.id, "nombre": curso.nombre, "faltas_permitidas": curso.faltas_permitidas,
+                  "horario": curso.horario or ""},
+        "fecha": fecha.isoformat(),
+        "hoy": hoy.isoformat(),
+        "clases_registradas": clases,
+        "fechas": fechas,
+        "ya_registrada": bool(del_dia),
+        "en_riesgo": sum(1 for x in estudiantes if x['riesgo'] == 'EN_RIESGO'),
+        "estudiantes": estudiantes,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def mi_asistencia_api(request):
+    """Asistencia del estudiante autenticado, curso por curso (resumen y detalle por día)."""
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+    if not es_estudiante(user):
+        return _error("Solo los estudiantes tienen esta vista.", status.HTTP_403_FORBIDDEN)
+
+    salida = []
+    matriculas = Matricula.objects.filter(
+        estudiante=user, status=Matricula.MatriculaStatus.APPROVED
+    ).select_related('curso').order_by('-fecha_matricula')
+    for m in matriculas:
+        curso = m.curso
+        clases, resumen = _resumen_asistencia(curso, [user.id])
+        r_ = resumen[user.id]
+        detalle = [{
+            "fecha": a.fecha.isoformat(), "estado": a.estado, "observacion": a.observacion,
+        } for a in Asistencia.objects.filter(curso=curso, estudiante=user).order_by('-fecha')]
+        salida.append({
+            "curso_id": curso.id,
+            "curso_nombre": curso.nombre,
+            "idioma": idioma_legible(curso.language),
+            "periodo": curso.periodo,
+            "horario": curso.horario or "",
+            "faltas_permitidas": curso.faltas_permitidas,
+            "clases_registradas": clases,
+            **r_,
+            "detalle": detalle,
+        })
+    return Response(salida)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def exportar_asistencia_excel_api(request, curso_id):
+    """
+    Descarga la asistencia del curso en Excel: una fila por estudiante, una columna por día de clase
+    (P = presente, F = falta, J = justificada) y los totales. Solo el docente del curso, el INDI o el Admin.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+    curso = get_object_or_404(Curso, id=curso_id)
+    if not ((rol_de(user) == 'DOCENTE' and curso.docente_id == user.id) or es_personal_indi(user)):
+        return _error("No tienes permisos sobre este curso.", status.HTTP_403_FORBIDDEN)
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return _error("Falta instalar openpyxl en el servidor (pip install openpyxl).", status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    matriculas = list(
+        Matricula.objects.filter(curso=curso, status=Matricula.MatriculaStatus.APPROVED)
+        .select_related('estudiante').order_by('estudiante__last_name', 'estudiante__first_name')
+    )
+    ids = [m.estudiante_id for m in matriculas]
+    fechas = sorted(set(Asistencia.objects.filter(curso=curso).values_list('fecha', flat=True)))
+    mapa = {(a.estudiante_id, a.fecha): a for a in Asistencia.objects.filter(curso=curso, estudiante_id__in=ids)}
+    _, resumen = _resumen_asistencia(curso, ids)
+    etiqueta = {'PRESENTE': 'P', 'FALTA': 'F', 'JUSTIFICADA': 'J'}
+    riesgo_txt = {'AL_DIA': 'Al día', 'ATENCION': 'Límite de faltas', 'EN_RIESGO': 'En riesgo'}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Asistencia"
+    ws['A1'] = f"Asistencia - {curso.nombre}"
+    ws['A1'].font = Font(bold=True, size=14)
+    docente = (curso.docente.get_full_name() or curso.docente.username) if curso.docente else "Sin asignar"
+    ws['A2'] = f"Docente: {docente}  |  Horario: {curso.horario or '-'}  |  Período: {curso.periodo}  |  Faltas permitidas: {curso.faltas_permitidas}"
+    ws['A3'] = "P = Presente   F = Falta   J = Falta justificada"
+    ws['A3'].font = Font(italic=True, color="666666")
+
+    fila_cab = 5
+    cabecera = ["N°", "DNI", "Estudiante"] + [f.strftime('%d/%m') for f in fechas] + ["Presentes", "Faltas", "Justificadas", "% Asistencia", "Estado"]
+    relleno = PatternFill("solid", fgColor="1E293B")
+    for i, t in enumerate(cabecera, 1):
+        c = ws.cell(row=fila_cab, column=i, value=t)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = relleno
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    rojo = PatternFill("solid", fgColor="FECACA")
+    amarillo = PatternFill("solid", fgColor="FEF3C7")
+    verde = PatternFill("solid", fgColor="D1FAE5")
+    for n, m in enumerate(matriculas, 1):
+        e = m.estudiante
+        r = resumen[e.id]
+        fila = fila_cab + n
+        ws.cell(row=fila, column=1, value=n)
+        ws.cell(row=fila, column=2, value=e.username)
+        ws.cell(row=fila, column=3, value=e.get_full_name() or e.username)
+        for j, f in enumerate(fechas):
+            a = mapa.get((e.id, f))
+            c = ws.cell(row=fila, column=4 + j, value=etiqueta[a.estado] if a else "")
+            c.alignment = Alignment(horizontal="center")
+            if a:
+                c.fill = {'PRESENTE': verde, 'FALTA': rojo, 'JUSTIFICADA': amarillo}[a.estado]
+        base = 4 + len(fechas)
+        ws.cell(row=fila, column=base, value=r['presentes'])
+        ws.cell(row=fila, column=base + 1, value=r['faltas'])
+        ws.cell(row=fila, column=base + 2, value=r['justificadas'])
+        ws.cell(row=fila, column=base + 3, value=(r['porcentaje'] / 100) if r['porcentaje'] is not None else None).number_format = '0%'
+        est = ws.cell(row=fila, column=base + 4, value=riesgo_txt[r['riesgo']])
+        if r['riesgo'] == 'EN_RIESGO':
+            est.fill = rojo
+        elif r['riesgo'] == 'ATENCION':
+            est.fill = amarillo
+
+    ws.column_dimensions['A'].width = 5
+    ws.column_dimensions['B'].width = 12
+    ws.column_dimensions['C'].width = 34
+    for j in range(len(fechas)):
+        ws.column_dimensions[get_column_letter(4 + j)].width = 7
+    for k in range(5):
+        ws.column_dimensions[get_column_letter(4 + len(fechas) + k)].width = 14
+    ws.freeze_panes = ws.cell(row=fila_cab + 1, column=4)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    nombre = re.sub(r'[^A-Za-z0-9_-]+', '_', curso.nombre).strip('_') or 'curso'
+    respuesta = HttpResponse(
+        buf.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    respuesta['Content-Disposition'] = f'attachment; filename="asistencia_{nombre}.xlsx"'
+    registrar_auditoria(user, "EXPORTACIÓN DE ASISTENCIA", f"Curso #{curso.id} ({curso.nombre}): Excel de asistencia descargado.")
+    return respuesta

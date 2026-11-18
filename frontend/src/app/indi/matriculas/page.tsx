@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { abrirArchivoProtegido, API_URL } from '../../../lib/abrirArchivo';
 import Paginador, { usePaginacion } from '../../../components/ui/Paginador';
-import { ClipboardList, Receipt, X } from "lucide-react";
+import { CalendarPlus, ClipboardList, Receipt, X } from "lucide-react";
 
 interface Matricula {
   id: number;
@@ -18,7 +18,11 @@ interface Matricula {
   estado: string;
   tiene_voucher: boolean;
   fecha: string;
+  reserva_vence?: string;
+  reserva_vencida?: boolean;
 }
+
+const fechaCorta = (iso?: string) => (iso ? new Date(iso).toLocaleDateString('es-PE') : '');
 
 const ESTADOS: Record<string, { texto: string; clase: string }> = {
   ESPERANDO_PAGO: { texto: 'Esperando pago', clase: 'bg-amber-50 text-amber-700 border-amber-200' },
@@ -86,6 +90,24 @@ export default function GestionMatriculasINDI() {
       }
     } catch {
       setMensaje({ tipo: 'error', texto: 'Error de red al procesar la matrícula.' });
+    } finally {
+      setProcesando(null);
+    }
+  };
+
+  const ampliarPlazo = async (id: number) => {
+    setProcesando(id);
+    try {
+      const res = await fetch(`${API_URL}/matriculas/${id}/ampliar/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dias: 5 }),
+      });
+      const data = await res.json();
+      setMensaje({ tipo: res.ok ? 'exito' : 'error', texto: data.message || (res.ok ? 'Plazo ampliado.' : 'No se pudo ampliar el plazo.') });
+      if (res.ok) fetchMatriculas();
+    } catch {
+      setMensaje({ tipo: 'error', texto: 'Error de red al ampliar el plazo.' });
     } finally {
       setProcesando(null);
     }
@@ -208,9 +230,28 @@ export default function GestionMatriculasINDI() {
                         )}
                       </td>
                       <td className="p-3">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${est.clase}`}>{est.texto}</span>
+                        {m.estado === 'ESPERANDO_PAGO' && m.reserva_vencida ? (
+                          <span className="px-2.5 py-1 rounded-full text-xs font-semibold border bg-rose-50 text-rose-700 border-rose-200">Reserva vencida</span>
+                        ) : (
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${est.clase}`}>{est.texto}</span>
+                        )}
+                        {m.estado === 'ESPERANDO_PAGO' && m.reserva_vence && (
+                          <div className="text-xs text-gray-400 mt-1">
+                            {m.reserva_vencida ? 'Venció' : 'Vence'} el {fechaCorta(m.reserva_vence)}
+                          </div>
+                        )}
                       </td>
                       <td className="p-3 text-center whitespace-nowrap">
+                        {m.estado === 'ESPERANDO_PAGO' && (
+                          <button
+                            disabled={procesando === m.id}
+                            onClick={() => ampliarPlazo(m.id)}
+                            title="Da 5 días más para pagar (por excepción)"
+                            className="bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 rounded-lg text-xs hover:bg-amber-100 transition font-semibold disabled:opacity-50 cursor-pointer"
+                          >
+                            <CalendarPlus className="w-3.5 h-3.5 inline-block -mt-0.5 mr-1" />Ampliar plazo
+                          </button>
+                        )}
                         {m.estado === 'PENDIENTE' && (
                           (
                             <span className="space-x-2">

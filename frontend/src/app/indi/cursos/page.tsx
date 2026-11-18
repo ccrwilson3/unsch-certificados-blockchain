@@ -19,6 +19,9 @@ interface Curso {
   horario?: string;
   docente_id: number | null;
   docente_nombre: string;
+  cupos?: number | null;
+  cupos_ocupados?: number;
+  faltas_permitidas?: number;
 }
 
 interface Docente {
@@ -45,6 +48,8 @@ export default function GestionCursosINDI() {
   const [dias, setDias] = useState('L-V');
   const [horaInicio, setHoraInicio] = useState('08:00');
   const [horaFin, setHoraFin] = useState('10:00');
+  const [cupos, setCupos] = useState('');
+  const [faltasPerm, setFaltasPerm] = useState('2');
 
   // El horario se arma con un formato único para que el registro pueda agrupar los cursos
   const horarioArmado = `${dias} ${horaInicio} - ${horaFin}`;
@@ -56,6 +61,8 @@ export default function GestionCursosINDI() {
   const [editPeriodo, setEditPeriodo] = useState('');
   const [editModalidad, setEditModalidad] = useState('PRESENCIAL');
   const [editHorario, setEditHorario] = useState('');
+  const [editCupos, setEditCupos] = useState('');
+  const [editFaltas, setEditFaltas] = useState('2');
   const [errorEditar, setErrorEditar] = useState('');
   const [guardandoEdit, setGuardandoEdit] = useState(false);
 
@@ -118,6 +125,8 @@ export default function GestionCursosINDI() {
           modalidad,
           horario: horarioArmado,
           docente_id: docenteId ? parseInt(docenteId) : null,
+          cupos: cupos === '' ? null : parseInt(cupos),
+          faltas_permitidas: parseInt(faltasPerm || '2'),
         }),
       });
 
@@ -125,6 +134,7 @@ export default function GestionCursosINDI() {
       if (res.ok) {
         setMensajeExito('¡Curso lanzado! Ya aparece en el registro y en la inscripción de los estudiantes.');
         setDocenteId('');
+        setCupos('');
         fetchCursos();
       } else {
         setError(data.message || 'Error al procesar la solicitud.');
@@ -142,6 +152,8 @@ export default function GestionCursosINDI() {
     setEditPeriodo(c.periodo);
     setEditModalidad(c.modalidad || 'PRESENCIAL');
     setEditHorario(c.horario || '');
+    setEditCupos(c.cupos != null ? String(c.cupos) : '');
+    setEditFaltas(String(c.faltas_permitidas ?? 2));
     setErrorEditar('');
   };
 
@@ -161,6 +173,8 @@ export default function GestionCursosINDI() {
           periodo: editPeriodo,
           modalidad: editModalidad,
           horario: editHorario,
+          cupos: editCupos === '' ? null : parseInt(editCupos),
+          faltas_permitidas: parseInt(editFaltas || '2'),
         }),
       });
 
@@ -288,6 +302,24 @@ export default function GestionCursosINDI() {
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Cupos (vacantes)</label>
+            <input
+              type="number" min={1} max={500} value={cupos} onChange={(e) => setCupos(e.target.value)}
+              placeholder="Vacío = sin límite"
+              className="w-full p-2.5 border rounded-md text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Faltas permitidas</label>
+            <input
+              type="number" min={0} max={10} value={faltasPerm} onChange={(e) => setFaltasPerm(e.target.value)}
+              className="w-full p-2.5 border rounded-md text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-1">La siguiente falta sin justificar pone al estudiante en riesgo de desaprobar.</p>
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Docente Disponible ({language})
             </label>
@@ -340,6 +372,7 @@ export default function GestionCursosINDI() {
                   <th className="p-3">Curso / Programa</th>
                   <th className="p-3">Idioma / Nivel</th>
                   <th className="p-3">Período</th>
+                  <th className="p-3">Cupos</th>
                   <th className="p-3">Docente Asignado</th>
                   <th className="p-3 text-right">Acciones</th>
                 </tr>
@@ -355,6 +388,15 @@ export default function GestionCursosINDI() {
                     </td>
                     <td className="p-3 text-gray-600">{c.idioma || c.language} - {c.nivel || c.level} ({c.subnivel})</td>
                     <td className="p-3 text-gray-600 font-mono text-xs">{c.periodo}</td>
+                    <td className="p-3 text-xs">
+                      {c.cupos == null ? (
+                        <span className="text-gray-400">Sin límite</span>
+                      ) : (
+                        <span className={`px-2 py-1 rounded-full font-semibold border ${(c.cupos_ocupados ?? 0) >= c.cupos ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                          {c.cupos_ocupados ?? 0} / {c.cupos}
+                        </span>
+                      )}
+                    </td>
                     <td className="p-3">
                       <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${c.docente_id ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
                         {c.docente_nombre}
@@ -388,7 +430,7 @@ export default function GestionCursosINDI() {
             <h2 className="text-lg font-bold text-slate-800 mb-1">Editar Curso</h2>
             <p className="text-xs text-slate-500 mb-4">
               {cursoEditando.idioma || cursoEditando.language} - {cursoEditando.nivel || cursoEditando.level} ({cursoEditando.subnivel}).
-              Aquí puedes corregir el nombre, el horario, la modalidad y el docente.
+              Aquí puedes corregir el nombre, el horario, la modalidad, el docente, los cupos y las faltas permitidas.
             </p>
 
             {errorEditar && (
@@ -448,6 +490,24 @@ export default function GestionCursosINDI() {
                     <option value="PRESENCIAL">Presencial</option>
                     <option value="VIRTUAL">Virtual</option>
                   </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Cupos</label>
+                  <input
+                    type="number" min={1} max={500} value={editCupos} onChange={(e) => setEditCupos(e.target.value)}
+                    placeholder="Vacío = sin límite"
+                    className="w-full px-3.5 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Faltas permitidas</label>
+                  <input
+                    type="number" min={0} max={10} value={editFaltas} onChange={(e) => setEditFaltas(e.target.value)}
+                    className="w-full px-3.5 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
               </div>
 

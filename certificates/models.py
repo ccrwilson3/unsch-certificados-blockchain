@@ -3,6 +3,7 @@ from django.core.files.storage import FileSystemStorage
 from django.db import models
 
 import uuid
+from datetime import timedelta
 import hashlib
 from django.conf import settings
 
@@ -105,6 +106,27 @@ class SolicitudMatricula(models.Model):
     )
     motivo_rechazo = models.TextField(blank=True, default='', help_text="Motivo que el INDI da al rechazar la matrícula")
     fecha_solicitud = models.DateTimeField(auto_now_add=True)
+    reserva_hasta = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Fin del plazo para pagar la orden (5 días). El INDI puede ampliarlo. Vacío = fecha de solicitud + 5 días.",
+    )
+
+    RESERVA_DIAS = 5
+
+    @property
+    def vence_en(self):
+        if self.reserva_hasta:
+            return self.reserva_hasta
+        if self.fecha_solicitud:
+            return self.fecha_solicitud + timedelta(days=self.RESERVA_DIAS)
+        return None
+
+    @property
+    def reserva_vencida(self):
+        """Solo una orden aún sin pagar puede vencer; con voucher en revisión ya no corre el plazo."""
+        from django.utils import timezone
+        v = self.vence_en
+        return self.estado == 'ESPERANDO_PAGO' and v is not None and timezone.now() > v
 
     def __str__(self):
         return f"Matrícula: {self.curso} - {self.estudiante.username} [{self.estado}]"
@@ -146,6 +168,15 @@ class Curso(models.Model):
         help_text="Docente responsable del curso"
     )
     
+    cupos = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Vacantes del curso. Vacío = sin límite.",
+    )
+    faltas_permitidas = models.PositiveSmallIntegerField(
+        default=2,
+        help_text="Faltas sin justificar que se toleran. La siguiente pone al estudiante en riesgo de desaprobar.",
+    )
+
     activo = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -366,3 +397,27 @@ class Material(models.Model):
 
     def __str__(self):
         return f"{self.get_tipo_display()}: {self.titulo} ({self.curso.nombre})"
+
+
+class Asistencia(models.Model):
+    class Estado(models.TextChoices):
+        PRESENTE = 'PRESENTE', 'Presente'
+        FALTA = 'FALTA', 'Falta'
+        JUSTIFICADA = 'JUSTIFICADA', 'Falta justificada'
+
+    curso = models.ForeignKey(Curso, on_delete=models.CASCADE, related_name='asistencias')
+    estudiante = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='asistencias')
+    fecha = models.DateField()
+    estado = models.CharField(max_length=12, choices=Estado.choices, default=Estado.PRESENTE)
+    observacion = models.CharField(max_length=200, blank=True, default='')
+    registrado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='asistencias_registradas'
+    )
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('curso', 'estudiante', 'fecha')
+        ordering = ['fecha']
+
+    def __str__(self):
+        return f"{self.curso_id} {self.estudiante_id} {self.fecha} {self.estado}"

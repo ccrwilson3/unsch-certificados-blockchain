@@ -1,7 +1,7 @@
 "use client";
 
 import AppShell, { type ItemNav } from "../../components/ui/AppShell";
-import { FileText, Award, PlusCircle, CreditCard, BarChart3, FolderOpen } from "lucide-react";
+import { FileText, Award, PlusCircle, CreditCard, BarChart3, FolderOpen, CalendarCheck } from "lucide-react";
 
 const items: ItemNav[] = [
   { href: "/estudiante/solicitudes", texto: "Mis Solicitudes", Icono: FileText },
@@ -9,6 +9,7 @@ const items: ItemNav[] = [
   { href: "/estudiante/matricula", texto: "Inscripción a Cursos", Icono: PlusCircle },
   { href: "/estudiante/dashboard", texto: "Órdenes de Pago", Icono: CreditCard },
   { href: "/estudiante/notas", texto: "Mis Notas y Promedios", Icono: BarChart3 },
+  { href: "/estudiante/asistencia", texto: "Mi Asistencia", Icono: CalendarCheck },
   { href: "/estudiante/materiales", texto: "Materiales de Clase", Icono: FolderOpen },
 ];
 
