@@ -1,7 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Check, FileText, Search, ShieldCheck, Upload } from "lucide-react";
+import { AlertTriangle, Check, FileText, Search, ShieldCheck, Upload, X } from "lucide-react";
+
+const VEREDICTOS: Record<string, { texto: string; clase: string }> = {
+  AUTENTICO: { texto: "DOCUMENTO AUTÉNTICO", clase: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  REVOCADO: { texto: "CERTIFICADO REVOCADO", clase: "bg-rose-50 text-rose-700 border-rose-200" },
+  ALTERADO: { texto: "DOCUMENTO ALTERADO O FALSO", clase: "bg-rose-50 text-rose-700 border-rose-200" },
+  SIN_CONFIRMAR: { texto: "SIN CONFIRMAR", clase: "bg-amber-50 text-amber-700 border-amber-200" },
+};
 
 export default function ValidarRequisitosPage() {
   const [modoVerificacion, setModoVerificacion] = useState<"texto" | "pdf">("texto");
@@ -71,7 +78,9 @@ export default function ValidarRequisitosPage() {
           setError(data.mensaje || "El archivo PDF no coincide con ningún registro oficial o podría estar adulterado.");
         }
       } else {
-        setError("Error en el servidor al procesar el archivo PDF.");
+        let texto = "Error en el servidor al procesar el archivo PDF.";
+        try { texto = (await res.json()).mensaje || texto; } catch { /* sin JSON */ }
+        setError(texto);
       }
     } catch (err) {
       setError("Error de conexión con el servidor.");
@@ -177,7 +186,11 @@ export default function ValidarRequisitosPage() {
                 DNI / Código: <span className="font-semibold text-slate-700">{resultado.dni || "N/A"}</span> | Registro: {resultado.codigo}
               </p>
             </div>
-            {resultado.is_valid !== false ? (
+            {resultado.veredicto ? (
+              <span className={`px-3 py-1 text-xs font-bold rounded-full border ${VEREDICTOS[resultado.veredicto]?.clase || VEREDICTOS.ALTERADO.clase}`}>
+                {VEREDICTOS[resultado.veredicto]?.texto || resultado.veredicto}
+              </span>
+            ) : resultado.is_valid !== false ? (
               <span className="px-3 py-1 text-xs font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                 VALIDADO Y REGISTRADO
               </span>
@@ -207,6 +220,27 @@ export default function ValidarRequisitosPage() {
             </div>
           </div>
 
+          {resultado.veredicto && (
+            <div className={`p-4 rounded-xl border ${VEREDICTOS[resultado.veredicto]?.clase || VEREDICTOS.ALTERADO.clase}`}>
+              <p className="text-sm font-semibold">{resultado.mensaje}</p>
+              {Array.isArray(resultado.comprobaciones) && (
+                <ul className="mt-3 space-y-1.5">
+                  {resultado.comprobaciones.map((c: { etiqueta: string; ok: boolean }) => (
+                    <li key={c.etiqueta} className="flex items-start gap-2 text-xs text-slate-700">
+                      {c.ok ? (
+                        <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <X className="w-4 h-4 text-rose-600 shrink-0" />
+                      )}
+                      <span className={c.ok ? '' : 'font-semibold text-rose-700'}>{c.etiqueta}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {(resultado.veredicto ? resultado.veredicto === "AUTENTICO" : resultado.is_valid !== false) && (
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex justify-between items-center">
             <div>
               <p className="text-xs font-bold text-emerald-800">
@@ -225,6 +259,7 @@ export default function ValidarRequisitosPage() {
               <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar Constancia PDF
             </a>
           </div>
+          )}
         </div>
       )}
     </main>

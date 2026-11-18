@@ -195,105 +195,159 @@ def consultar_logs_auditoria(request):
 # VERIFICACIÓN PÚBLICA DE CERTIFICADOS
 # ==========================================================
 
+TAMANO_MAXIMO_PDF_VERIFICAR = 5 * 1024 * 1024
+
+
+def _normalizar_texto(valor):
+    """Mayúsculas, sin tildes y con espacios simples: para comparar el texto del PDF con la base de datos."""
+    valor = unicodedata.normalize('NFKD', str(valor or ''))
+    valor = ''.join(ch for ch in valor if not unicodedata.combining(ch))
+    return re.sub(r'\s+', ' ', valor).strip().upper()
+
+
+def _leer_texto_pdf(contenido):
+    """Texto de las páginas del PDF. Lanza ValueError si no es un PDF legible."""
+    try:
+        from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
+    except ImportError:
+        raise RuntimeError("Falta instalar pypdf en el servidor (pip install pypdf).")
+    try:
+        lector = PdfReader(io.BytesIO(contenido))
+        if lector.is_encrypted:
+            raise ValueError("El PDF está protegido con contraseña.")
+        if len(lector.pages) > 5:
+            raise ValueError("El archivo tiene demasiadas páginas para ser un certificado del INDI.")
+        return "\n".join((p.extract_text() or '') for p in lector.pages)
+    except ValueError:
+        raise
+    except (PyPdfError, Exception):
+        raise ValueError("El archivo no es un PDF válido o está dañado.")
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verificar_certificado_pdf_api(request):
     """
-    Permite verificar la autenticidad de un certificado subiendo el archivo PDF.
-    Utiliza múltiples estrategias de búsqueda (Hash, Código en nombre, y Patrón numérico).
-    (Pendiente: esta verificación se rediseña en una fase posterior.)
+    Verifica un certificado a partir de su PDF, leyendo lo que el documento dice (no su nombre de archivo):
+      1. el PDF trae el código y el hash SHA-256 impresos por el INDI;
+      2. ese código existe en el sistema y el hash impreso es el registrado;
+      3. el nombre, idioma, nivel, subnivel y año del PDF coinciden con el registro oficial
+         (si alguien edita el texto del PDF, aquí se detecta);
+      4. el registro no fue alterado en la base de datos (se recalcula su hash);
+      5. el hash sigue vigente en la blockchain y el certificado no está revocado.
+    Veredictos: AUTENTICO, REVOCADO, ALTERADO, SIN_CONFIRMAR (no se pudo consultar la blockchain)
+    o NO_RECONOCIDO.
     """
-    if 'pdf_file' not in request.FILES:
-        return Response({"existe": False, "mensaje": "No se ha adjuntado ningún archivo PDF."}, status=status.HTTP_400_BAD_REQUEST)
-
-    pdf_file = request.FILES['pdf_file']
-    filename = pdf_file.name
-    print(f"📁 [VERIFICAR PDF] Analizando archivo: {filename}, tamaño: {pdf_file.size} bytes")
+    archivo = request.FILES.get('pdf_file')
+    if archivo is None:
+        return Response({"existe": False, "veredicto": "NO_RECONOCIDO", "mensaje": "No se ha adjuntado ningún archivo PDF."}, status=400)
+    if archivo.size > TAMANO_MAXIMO_PDF_VERIFICAR:
+        return Response({"existe": False, "veredicto": "NO_RECONOCIDO", "mensaje": "El archivo es demasiado grande (máximo 5 MB)."}, status=400)
+    contenido = archivo.read()
+    if not contenido.startswith(b'%PDF'):
+        return Response({"existe": False, "veredicto": "NO_RECONOCIDO", "mensaje": "El archivo no es un PDF."}, status=400)
 
     try:
-        file_bytes = pdf_file.read()
-        uploaded_hash = hashlib.sha256(file_bytes).hexdigest()
+        texto = _leer_texto_pdf(contenido)
+    except RuntimeError as e:
+        return Response({"existe": False, "veredicto": "NO_RECONOCIDO", "mensaje": str(e)}, status=500)
+    except ValueError as e:
+        return Response({"existe": False, "veredicto": "NO_RECONOCIDO", "mensaje": str(e)}, status=400)
 
-        certificate = None
-        solicitud = None
+    compacto = re.sub(r'\s+', '', texto)
+    m_codigo = re.search(r'INDI-\d{4}-[A-Z]{2,4}-\d+', texto, re.IGNORECASE)
+    m_hash = re.search(r'HASHSHA-256:(0x[0-9a-fA-F]{64})', compacto)
+    codigo_pdf = m_codigo.group(0).upper() if m_codigo else ''
+    hash_pdf = m_hash.group(1).lower() if m_hash else ''
 
-        # ESTRATEGIA 1: Buscar por hash exacto en la tabla Certificate
-        certificate = Certificate.objects.filter(certificate_hash=uploaded_hash).first()
-
-        # ESTRATEGIA 2: Extraer el código único del nombre del archivo
-        if not certificate:
-            match_code = re.search(r'INDI-\d{4}-[A-Z]{2,4}-\d+', filename, re.IGNORECASE)
-            if match_code:
-                extracted_code = match_code.group(0).upper()
-                print(f"🔍 Código exacto extraído del nombre: {extracted_code}")
-                certificate = Certificate.objects.filter(certificate_code=extracted_code).first()
-                if not certificate:
-                    match_id = re.search(r'\d+$', extracted_code)
-                    if match_id:
-                        sol_id = int(match_id.group())
-                        solicitud = CertificateRequest.objects.filter(id=sol_id, status__in=['APPROVED', 'APROBADO']).first()
-
-        # ESTRATEGIA 3: Búsqueda por ID numérico suelto en el nombre del archivo
-        if not certificate and not solicitud:
-            match_num = re.search(r'\d+', filename)
-            if match_num:
-                possible_id = int(match_num.group())
-                print(f"🔍 ID numérico extraído del nombre: {possible_id}")
-                certificate = Certificate.objects.filter(certificate_code__icontains=str(possible_id)).first()
-                if not certificate:
-                    solicitud = CertificateRequest.objects.filter(id=possible_id, status__in=['APPROVED', 'APROBADO']).first()
-
-        # 1. Si encontramos un Certificado oficial
-        if certificate is not None:
-            raw_lang = getattr(certificate, 'language', 'EN')
-            idioma_texto = obtener_nombre_idioma(raw_lang)
-
-            return Response({
-                "existe": True,
-                "is_valid": certificate.status == Certificate.Status.ISSUED,
-                "codigo": certificate.certificate_code,
-                "estudiante": certificate.student.get_full_name() or certificate.student.username,
-                "dni": getattr(certificate.student, 'dni', certificate.student.username),
-                "idioma": idioma_texto,
-                "nivel": certificate.get_level_display(),
-                "subnivel": getattr(certificate, 'subnivel', 'Nivel I'),
-                "anio": getattr(certificate, 'anio', certificate.issued_at.year if certificate.issued_at else '2026'),
-                "fecha_emision": certificate.issued_at.isoformat() if certificate.issued_at else None,
-                "estado": certificate.get_status_display(),
-                "certificate_hash": certificate.certificate_hash,
-                "mensaje": "¡PDF verificado con éxito! El documento es auténtico."
-            }, status=status.HTTP_200_OK)
-
-        # 2. Si encontramos una Solicitud Aprobada (respaldo institucional)
-        if solicitud is not None:
-            codigo_generado = f"INDI-2026-{str(solicitud.language)[:3].upper()}-000{solicitud.id}"
-            raw_lang_sol = getattr(solicitud, 'language', 'EN')
-            idioma_texto_sol = obtener_nombre_idioma(raw_lang_sol)
-
-            return Response({
-                "existe": True,
-                "is_valid": True,
-                "codigo": codigo_generado,
-                "estudiante": solicitud.student.get_full_name() or solicitud.student.username,
-                "dni": getattr(solicitud.student, 'dni', solicitud.student.username),
-                "idioma": idioma_texto_sol,
-                "nivel": solicitud.get_level_display(),
-                "subnivel": getattr(solicitud, 'subnivel', 'Nivel I'),
-                "anio": getattr(solicitud, 'anio', '2026'),
-                "fecha_emision": solicitud.created_at.isoformat(),
-                "estado": "Aprobado",
-                "certificate_hash": uploaded_hash,
-                "mensaje": "¡PDF verificado a través de la solicitud aprobada del INDI!"
-            }, status=status.HTTP_200_OK)
-
+    if not codigo_pdf or not hash_pdf:
+        registrar_auditoria(None, "VERIFICACIÓN DE PDF", "PDF sin código ni hash del INDI: no reconocido.")
         return Response({
             "existe": False,
-            "mensaje": "El archivo PDF no coincide con ningún registro oficial del INDI o no contiene un código válido."
-        }, status=status.HTTP_200_OK)
+            "veredicto": "NO_RECONOCIDO",
+            "is_valid": False,
+            "mensaje": "El PDF no contiene el código ni el hash de un certificado del INDI. No es un certificado oficial.",
+        })
 
-    except Exception as e:
-        print(f"❌ Error procesando PDF: {str(e)}")
-        return Response({"existe": False, "mensaje": f"Error al procesar el PDF: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    certificado = Certificate.objects.select_related('student').filter(certificate_code__iexact=codigo_pdf).first()
+    if certificado is None:
+        registrar_auditoria(None, "VERIFICACIÓN DE PDF", f"Código {codigo_pdf} no registrado: no reconocido.")
+        return Response({
+            "existe": False,
+            "veredicto": "NO_RECONOCIDO",
+            "is_valid": False,
+            "mensaje": f"El código {codigo_pdf} no está registrado en el INDI. El documento no es auténtico.",
+        })
+
+    estudiante = certificado.student
+    norm = _normalizar_texto(texto)
+    nombre_ok = _normalizar_texto(estudiante.get_full_name() or estudiante.username) in norm
+    idioma_ok = _normalizar_texto(certificado.get_language_display()) in norm
+    nivel_ok = _normalizar_texto(certificado.get_level_display()) in norm
+    subnivel_ok = _normalizar_texto(certificado.subnivel or 'Nivel I') in norm
+    anio_ok = str(certificado.anio or (certificado.issued_at.year if certificado.issued_at else '')) in norm
+    hash_ok = hash_pdf == (certificado.certificate_hash or '').lower()
+    integro = certificado.generate_hash() == certificado.certificate_hash
+
+    estado_cadena = consultar_certificado_blockchain(certificado.certificate_hash)['estado']
+    cadena_ok = estado_cadena == 'VALIDO'
+    no_revocado = certificado.status != Certificate.Status.REVOKED and estado_cadena != 'REVOCADO'
+
+    comprobaciones = [
+        {"etiqueta": "El PDF trae el código y el hash del INDI", "ok": True},
+        {"etiqueta": "El código está registrado en el sistema", "ok": True},
+        {"etiqueta": "El hash impreso coincide con el registrado", "ok": hash_ok},
+        {"etiqueta": "Nombre del estudiante coincide con el registro", "ok": nombre_ok},
+        {"etiqueta": "Idioma, nivel, subnivel y año coinciden con el registro",
+         "ok": idioma_ok and nivel_ok and subnivel_ok and anio_ok},
+        {"etiqueta": "Los datos guardados no fueron alterados", "ok": integro},
+        {"etiqueta": "El hash está registrado y vigente en la blockchain", "ok": cadena_ok},
+        {"etiqueta": "El certificado no está revocado", "ok": no_revocado},
+    ]
+
+    contenido_ok = hash_ok and nombre_ok and idioma_ok and nivel_ok and subnivel_ok and anio_ok and integro
+    if not contenido_ok:
+        veredicto = "ALTERADO"
+        mensaje = ("El código existe, pero el contenido del PDF NO coincide con el certificado emitido por el INDI. "
+                   "El documento fue modificado o es falso.")
+    elif not no_revocado:
+        veredicto = "REVOCADO"
+        mensaje = "El documento es el emitido por el INDI, pero el certificado fue REVOCADO y ya no es válido."
+    elif estado_cadena == 'ERROR_CONSULTA':
+        veredicto = "SIN_CONFIRMAR"
+        mensaje = "El contenido del PDF coincide con el registro, pero no se pudo consultar la blockchain en este momento. Intente de nuevo."
+    elif not cadena_ok:
+        veredicto = "ALTERADO"
+        mensaje = "El hash de este certificado no figura vigente en la blockchain."
+    else:
+        veredicto = "AUTENTICO"
+        mensaje = "Documento auténtico: su contenido coincide con el certificado emitido y registrado en la blockchain."
+
+    registrar_auditoria(
+        None, "VERIFICACIÓN DE PDF",
+        f"Certificado {certificado.certificate_code}: resultado {veredicto}.",
+        certificate=certificado,
+    )
+
+    return Response({
+        "existe": True,
+        "veredicto": veredicto,
+        "is_valid": veredicto == "AUTENTICO",
+        "codigo": certificado.certificate_code,
+        "estudiante": estudiante.get_full_name() or estudiante.username,
+        "dni": getattr(estudiante, 'dni', None) or estudiante.username,
+        "idioma": obtener_nombre_idioma(certificado.language),
+        "nivel": certificado.get_level_display(),
+        "subnivel": certificado.subnivel or 'Nivel I',
+        "anio": certificado.anio or (certificado.issued_at.year if certificado.issued_at else ''),
+        "fecha_emision": certificado.issued_at.isoformat() if certificado.issued_at else None,
+        "estado": certificado.get_status_display(),
+        "certificate_hash": certificado.certificate_hash,
+        "estado_blockchain": estado_cadena,
+        "comprobaciones": comprobaciones,
+        "mensaje": mensaje,
+    })
 
 
 @api_view(['GET'])
