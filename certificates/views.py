@@ -3826,3 +3826,265 @@ def exportar_asistencia_excel_api(request, curso_id):
     respuesta['Content-Disposition'] = f'attachment; filename="asistencia_{nombre}.xlsx"'
     registrar_auditoria(user, "EXPORTACIÓN DE ASISTENCIA", f"Curso #{curso.id} ({curso.nombre}): Excel de asistencia descargado.")
     return respuesta
+
+
+# ==========================================================
+# REPORTES DEL INDI (resumen en pantalla y Excel)
+# ==========================================================
+
+def _rango_fechas(request):
+    """(desde, hasta, error) a partir de ?desde=AAAA-MM-DD&hasta=AAAA-MM-DD. Ambos opcionales."""
+    desde = hasta = None
+    for nombre in ('desde', 'hasta'):
+        texto = request.query_params.get(nombre)
+        if texto:
+            valor = _fecha_asistencia(texto)
+            if valor is None:
+                return None, None, f"La fecha '{nombre}' no es válida (usa AAAA-MM-DD)."
+            if nombre == 'desde':
+                desde = valor
+            else:
+                hasta = valor
+    if desde and hasta and desde > hasta:
+        return None, None, "La fecha 'desde' no puede ser posterior a 'hasta'."
+    return desde, hasta, None
+
+
+def _tipo_de_matricula(m, tipos):
+    return tipos.get((m.estudiante_id, m.curso_id), 'PUBLICO')
+
+
+def _datos_ingresos(desde, hasta):
+    """
+    Ingresos validados por el INDI en el rango:
+      - matrículas aprobadas (monto según el tipo de postulante), fechadas al matricularse;
+      - certificados con pago validado, fechados al validarse el pago.
+    """
+    mats = Matricula.objects.filter(status=Matricula.MatriculaStatus.APPROVED).select_related('estudiante', 'curso')
+    if desde:
+        mats = mats.filter(fecha_matricula__date__gte=desde)
+    if hasta:
+        mats = mats.filter(fecha_matricula__date__lte=hasta)
+    mats = list(mats.order_by('fecha_matricula'))
+    tipos = {
+        (s.estudiante_id, s.curso_id): s.tipo_postulante
+        for s in SolicitudMatricula.objects.filter(estado='APROBADA')
+    }
+    filas_mat = []
+    for m in mats:
+        tipo = _tipo_de_matricula(m, tipos)
+        filas_mat.append({
+            "fecha": timezone.localtime(m.fecha_matricula).date(),
+            "dni": m.estudiante.username,
+            "estudiante": m.estudiante.get_full_name() or m.estudiante.username,
+            "curso": m.curso.nombre,
+            "curso_id": m.curso_id,
+            "tipo": tipo,
+            "monto": monto_matricula(tipo),
+        })
+
+    certs = CertificateRequest.objects.filter(pago_validado=True).select_related('student', 'curso')
+    if desde:
+        certs = certs.filter(pago_revisado_en__date__gte=desde)
+    if hasta:
+        certs = certs.filter(pago_revisado_en__date__lte=hasta)
+    filas_cert = []
+    for c in certs.order_by('pago_revisado_en'):
+        filas_cert.append({
+            "fecha": timezone.localtime(c.pago_revisado_en).date() if c.pago_revisado_en else None,
+            "dni": c.student.username,
+            "estudiante": c.student.get_full_name() or c.student.username,
+            "curso": c.curso.nombre if c.curso else f"{idioma_legible(c.language)} {nivel_legible(c.level)}",
+            "operacion": c.numero_operacion or "",
+            "monto": c.monto or settings.PRECIO_CERTIFICADO,
+        })
+    return filas_mat, filas_cert
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def reporte_resumen_api(request):
+    """Resumen de ingresos y matriculados por curso, para la pantalla de reportes del INDI."""
+    user, error = exigir_personal_indi(request)
+    if error:
+        return error
+    desde, hasta, err = _rango_fechas(request)
+    if err:
+        return _error(err, status.HTTP_400_BAD_REQUEST)
+
+    filas_mat, filas_cert = _datos_ingresos(desde, hasta)
+    total_mat = sum((f['monto'] for f in filas_mat), Decimal('0'))
+    total_cert = sum((f['monto'] for f in filas_cert), Decimal('0'))
+
+    por_curso = {}
+    for f in filas_mat:
+        d = por_curso.setdefault(f['curso_id'], {"curso": f['curso'], "matriculados": 0, "ingresos": Decimal('0')})
+        d['matriculados'] += 1
+        d['ingresos'] += f['monto']
+
+    return Response({
+        "desde": desde.isoformat() if desde else "",
+        "hasta": hasta.isoformat() if hasta else "",
+        "matriculas": {"cantidad": len(filas_mat), "total": float(total_mat)},
+        "certificados": {"cantidad": len(filas_cert), "total": float(total_cert)},
+        "total_general": float(total_mat + total_cert),
+        "por_curso": sorted(
+            [{"curso": v["curso"], "matriculados": v["matriculados"], "ingresos": float(v["ingresos"])} for v in por_curso.values()],
+            key=lambda x: -x["ingresos"],
+        ),
+    })
+
+
+def _estilo_cabecera(ws, fila, titulos):
+    from openpyxl.styles import Alignment, Font, PatternFill
+    for i, t in enumerate(titulos, 1):
+        c = ws.cell(row=fila, column=i, value=t)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1E293B")
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+
+def _anchos(ws, anchos):
+    from openpyxl.utils import get_column_letter
+    for i, a in enumerate(anchos, 1):
+        ws.column_dimensions[get_column_letter(i)].width = a
+
+
+def _respuesta_excel(wb, nombre):
+    buf = io.BytesIO()
+    wb.save(buf)
+    r = HttpResponse(buf.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    r['Content-Disposition'] = f'attachment; filename="{nombre}"'
+    return r
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def reporte_ingresos_excel_api(request):
+    """Excel de ingresos (matrículas y certificados) con totales. Filtros: ?desde=&hasta="""
+    user, error = exigir_personal_indi(request)
+    if error:
+        return error
+    desde, hasta, err = _rango_fechas(request)
+    if err:
+        return _error(err, status.HTTP_400_BAD_REQUEST)
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError:
+        return _error("Falta instalar openpyxl en el servidor (pip install openpyxl).", 500)
+
+    filas_mat, filas_cert = _datos_ingresos(desde, hasta)
+    wb = Workbook()
+    rango = f"{desde.strftime('%d/%m/%Y') if desde else 'inicio'} al {hasta.strftime('%d/%m/%Y') if hasta else 'hoy'}"
+
+    ws = wb.active
+    ws.title = "Resumen"
+    ws['A1'] = "Reporte de ingresos - INDI UNSCH"
+    ws['A1'].font = Font(bold=True, size=14)
+    ws['A2'] = f"Periodo: {rango}"
+    total_mat = sum((f['monto'] for f in filas_mat), Decimal('0'))
+    total_cert = sum((f['monto'] for f in filas_cert), Decimal('0'))
+    _estilo_cabecera(ws, 4, ["Concepto", "Cantidad", "Total (S/)"])
+    ws.append(["Matrículas aprobadas", len(filas_mat), float(total_mat)])
+    ws.append(["Certificados con pago validado", len(filas_cert), float(total_cert)])
+    ws.append(["TOTAL", len(filas_mat) + len(filas_cert), float(total_mat + total_cert)])
+    for c in ws[7]:
+        c.font = Font(bold=True)
+    for fila in ws.iter_rows(min_row=5, max_row=7, min_col=3, max_col=3):
+        fila[0].number_format = '#,##0.00'
+    _anchos(ws, [34, 12, 14])
+
+    wm = wb.create_sheet("Matrículas")
+    _estilo_cabecera(wm, 1, ["Fecha", "DNI", "Estudiante", "Curso", "Tipo de postulante", "Monto (S/)"])
+    for f in filas_mat:
+        wm.append([f['fecha'].strftime('%d/%m/%Y'), f['dni'], f['estudiante'], f['curso'],
+                   'Estudiante UNSCH' if f['tipo'] == 'UNSCH' else 'Público general', float(f['monto'])])
+    wm.append(["", "", "", "", "TOTAL", float(total_mat)])
+    for c in wm[wm.max_row]:
+        c.font = Font(bold=True)
+    for fila in wm.iter_rows(min_row=2, min_col=6, max_col=6):
+        fila[0].number_format = '#,##0.00'
+    _anchos(wm, [12, 12, 32, 36, 20, 12])
+
+    wc = wb.create_sheet("Certificados")
+    _estilo_cabecera(wc, 1, ["Fecha de validación", "DNI", "Estudiante", "Curso", "N° operación", "Monto (S/)"])
+    for f in filas_cert:
+        wc.append([f['fecha'].strftime('%d/%m/%Y') if f['fecha'] else '', f['dni'], f['estudiante'], f['curso'], f['operacion'], float(f['monto'])])
+    wc.append(["", "", "", "", "TOTAL", float(total_cert)])
+    for c in wc[wc.max_row]:
+        c.font = Font(bold=True)
+    for fila in wc.iter_rows(min_row=2, min_col=6, max_col=6):
+        fila[0].number_format = '#,##0.00'
+    _anchos(wc, [18, 12, 32, 36, 16, 12])
+
+    registrar_auditoria(user, "EXPORTACIÓN DE REPORTE", f"Reporte de ingresos ({rango}) descargado en Excel.")
+    return _respuesta_excel(wb, "ingresos_indi.xlsx")
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
+def reporte_matriculados_excel_api(request):
+    """
+    Excel de estudiantes matriculados, una hoja por curso. Filtros opcionales:
+    ?idioma=INGLES  ?periodo=2026-I  ?curso_id=3
+    """
+    user, error = exigir_personal_indi(request)
+    if error:
+        return error
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        return _error("Falta instalar openpyxl en el servidor (pip install openpyxl).", 500)
+
+    cursos = Curso.objects.filter(activo=True).select_related('docente').order_by('language', 'subnivel', 'horario')
+    idioma = normalizar_codigo(request.query_params.get('idioma'))
+    if idioma:
+        cursos = cursos.filter(language=idioma)
+    periodo = str(request.query_params.get('periodo') or '').strip()
+    if periodo:
+        cursos = cursos.filter(periodo=periodo)
+    curso_id = request.query_params.get('curso_id')
+    if curso_id:
+        try:
+            cursos = cursos.filter(id=int(curso_id))
+        except ValueError:
+            return _error("Curso no válido.", status.HTTP_400_BAD_REQUEST)
+    cursos = list(cursos)
+    if not cursos:
+        return _error("No hay cursos con esos filtros.", status.HTTP_404_NOT_FOUND)
+
+    tipos = {
+        (s.estudiante_id, s.curso_id): s.tipo_postulante
+        for s in SolicitudMatricula.objects.filter(estado='APROBADA', curso__in=cursos)
+    }
+    wb = Workbook()
+    wb.remove(wb.active)
+    usados = set()
+    total = 0
+    for curso in cursos:
+        base = re.sub(r'[\\/*?:\[\]]', ' ', f"{curso.nombre} {curso.horario or ''}").strip()[:28] or "Curso"
+        nombre, n = base, 2
+        while nombre in usados:
+            nombre = f"{base[:25]} {n}"
+            n += 1
+        usados.add(nombre)
+        ws = wb.create_sheet(nombre)
+        ws['A1'] = curso.nombre
+        ws['A2'] = (f"Período {curso.periodo} · {curso.get_modalidad_display()} · {curso.horario or '-'} · "
+                    f"Docente: {(curso.docente.get_full_name() or curso.docente.username) if curso.docente else 'sin asignar'}")
+        _estilo_cabecera(ws, 4, ["N°", "DNI", "Estudiante", "Correo personal", "Correo institucional", "Celular", "Tipo", "Fecha de matrícula"])
+        mats = (Matricula.objects.filter(curso=curso, status=Matricula.MatriculaStatus.APPROVED)
+                .select_related('estudiante').order_by('estudiante__last_name', 'estudiante__first_name'))
+        for i, m in enumerate(mats, 1):
+            e = m.estudiante
+            ws.append([i, e.username, e.get_full_name() or e.username, e.email or '',
+                       getattr(e, 'correo_institucional', '') or '', getattr(e, 'celular', '') or '',
+                       'UNSCH' if tipos.get((e.id, curso.id)) == 'UNSCH' else 'Público',
+                       timezone.localtime(m.fecha_matricula).strftime('%d/%m/%Y')])
+            total += 1
+        _anchos(ws, [5, 12, 32, 30, 32, 12, 10, 16])
+        ws.freeze_panes = "A5"
+
+    registrar_auditoria(user, "EXPORTACIÓN DE REPORTE", f"Lista de matriculados ({len(cursos)} curso(s), {total} estudiante(s)) descargada en Excel.")
+    return _respuesta_excel(wb, "matriculados_indi.xlsx")
