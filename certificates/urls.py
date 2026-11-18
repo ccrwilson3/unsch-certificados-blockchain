@@ -16,6 +16,7 @@ urlpatterns = [
     path('solicitudes/<int:request_id>/rectificar/', views.rectificar_solicitud_api, name='rectificar_solicitud_api'),
     path('solicitudes/<int:request_id>/orden-pago/', views.orden_pago_certificado_pdf, name='orden_pago_certificado_pdf'),
     path('solicitudes/<int:request_id>/pago/', views.subir_pago_certificado_api, name='subir_pago_certificado_api'),
+    path('solicitudes/<int:request_id>/cancelar/', views.cancelar_solicitud_certificado_api, name='cancelar_solicitud_certificado_api'),
     path('solicitudes/<int:request_id>/voucher/', views.ver_voucher_certificado_api, name='ver_voucher_certificado_api'),
     path('solicitudes/<int:request_id>/revisar-pago/', views.revisar_pago_certificado_api, name='revisar_pago_certificado_api'),
     path('solicitudes/<int:request_id>/reenviar-correo/', views.reenviar_correo_certificado_api, name='reenviar_correo_certificado_api'),
@@ -40,6 +41,7 @@ urlpatterns = [
     path('docente/cursos/', views.cursos_del_docente_api, name='cursos_del_docente_api'),
     path('matriculas/', views.gestionar_matriculas_api, name='gestionar_matriculas_api'),
     path('matriculas/<int:matricula_id>/aprobar/', views.aprobar_matricula_api, name='aprobar_matricula_api'),
+    path('matriculas/<int:solicitud_id>/cancelar/', views.cancelar_matricula_api, name='cancelar_matricula_api'),
     path('cursos/<int:curso_id>/evaluaciones/', views.gestionar_evaluaciones_y_notas_api, name='gestionar_evaluaciones_y_notas_api'),
     path('cursos/<int:curso_id>/notas/', views.gestionar_notas_curso_api, name='gestionar_notas_curso_api'),
     path('estudiante/notas/', views.notas_del_estudiante_api, name='notas_del_estudiante_api'),
@@ -51,6 +53,8 @@ urlpatterns = [
     path('matriculas/<int:solicitud_id>/voucher/', views.ver_voucher_matricula_api, name='ver_voucher_matricula_api'),
     path('perfil/', views.mi_perfil_api, name='mi_perfil_api'),
     path('perfil/password/', views.cambiar_password_api, name='cambiar_password_api'),
+    path('password/olvide/', views.olvide_password_api, name='olvide_password_api'),
+    path('password/restablecer/', views.restablecer_password_api, name='restablecer_password_api'),
 
     # Materiales de clase
     path('cursos/<int:curso_id>/materiales/', views.materiales_curso_api, name='materiales_curso_api'),

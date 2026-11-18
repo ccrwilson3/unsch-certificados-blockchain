@@ -5,6 +5,7 @@ import os
 import re
 import unicodedata
 import hashlib
+import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -14,6 +15,8 @@ from django.http import FileResponse, HttpResponse, Http404, JsonResponse
 from django.contrib.auth import authenticate, get_user_model
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core import signing
+from django.core.cache import cache
 from django.core.mail import EmailMultiAlternatives
 from django.core.validators import validate_email
 from django.utils.html import escape
@@ -1200,6 +1203,7 @@ def _solicitud_a_dict(s):
         "status": s.estado,
         "estado": s.estado,
         "tiene_voucher": bool(s.boucher_pago),
+        "motivo_rechazo": s.motivo_rechazo if s.estado == 'RECHAZADA' else "",
         "fecha": s.fecha_solicitud.isoformat() if s.fecha_solicitud else "",
     }
 
@@ -1319,16 +1323,25 @@ def aprobar_matricula_api(request, matricula_id):
             "APROBACIÓN DE MATRÍCULA",
             f"{detalle_base} aprobada. El estudiante quedó matriculado en el curso."
         )
+        _, nota_correo = notificar_matricula_aprobada(solicitud)
         return Response({
             "status": "success",
-            "message": "Matrícula aprobada. El estudiante quedó matriculado en el curso."
+            "message": f"Matrícula aprobada. El estudiante quedó matriculado en el curso. {nota_correo}"
         })
 
-    # Rechazo
+    # Rechazo: se exige el motivo para que el estudiante sepa qué corregir
+    motivo = str(request.data.get('motivo') or '').strip()
+    if len(motivo) < 5:
+        return _error("Escribe el motivo del rechazo (mínimo 5 caracteres).", status.HTTP_400_BAD_REQUEST)
+    if len(motivo) > 300:
+        return _error("El motivo es demasiado largo (máximo 300 caracteres).", status.HTTP_400_BAD_REQUEST)
+
     solicitud.estado = 'RECHAZADA'
+    solicitud.motivo_rechazo = motivo
     solicitud.save()
-    registrar_auditoria(user, "RECHAZO DE MATRÍCULA", f"{detalle_base} rechazada.")
-    return Response({"status": "success", "message": "Matrícula rechazada."})
+    registrar_auditoria(user, "RECHAZO DE MATRÍCULA", f"{detalle_base} rechazada. Motivo: {motivo}")
+    _, nota_correo = notificar_matricula_rechazada(solicitud)
+    return Response({"status": "success", "message": f"Matrícula rechazada. {nota_correo}"})
 
 
 @api_view(['POST'])
@@ -1536,8 +1549,13 @@ def subir_voucher_matricula(request):
     if solicitud is None:
         return _error("No se encontró la solicitud de matrícula o no te pertenece.", 404)
 
-    if solicitud.estado not in ('ESPERANDO_PAGO', 'PENDIENTE'):
+    if solicitud.estado not in ('ESPERANDO_PAGO', 'PENDIENTE', 'RECHAZADA'):
         return _error("Esta solicitud ya fue procesada y no admite un nuevo voucher.", 400)
+
+    era_rechazada = solicitud.estado == 'RECHAZADA'
+    motivo_anterior = solicitud.motivo_rechazo
+    if era_rechazada and (solicitud.curso is None or not solicitud.curso.activo):
+        return _error("Ese curso ya no está disponible. Elige otro desde 'Inscripción a Cursos'.", 400)
 
     extension = os.path.splitext(archivo.name)[1].lower()
     if extension not in EXTENSIONES_VOUCHER:
@@ -1554,12 +1572,50 @@ def subir_voucher_matricula(request):
     archivo.name = f"matricula_{solicitud.id}_{uuid.uuid4().hex[:8]}{extension}"
     solicitud.boucher_pago = archivo
     solicitud.estado = 'PENDIENTE'
+    solicitud.motivo_rechazo = ''
     solicitud.save()
 
-    return Response({
-        'status': 'success',
-        'message': 'Voucher subido correctamente. Tu matrícula está en revisión por el INDI.'
-    }, status=200)
+    if era_rechazada:
+        registrar_auditoria(
+            user,
+            "CORRECCIÓN DE MATRÍCULA",
+            f"Solicitud de matrícula #{solicitud.id}: el estudiante {user.username} volvió a enviar su voucher "
+            f"tras un rechazo (motivo anterior: {motivo_anterior or 'sin motivo'})."
+        )
+        mensaje = 'Corrección enviada. Tu matrícula vuelve a estar en revisión por el INDI.'
+    else:
+        mensaje = 'Voucher subido correctamente. Tu matrícula está en revisión por el INDI.'
+
+    return Response({'status': 'success', 'message': mensaje}, status=200)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])  # la autenticación y el propietario se validan dentro
+def cancelar_matricula_api(request, solicitud_id):
+    """
+    El estudiante cancela una inscripción hecha por error (otro curso, otro horario...).
+    Solo mientras no ha enviado voucher ni pagado: así no se pierde ningún trámite en curso.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    solicitud = SolicitudMatricula.objects.filter(id=solicitud_id, estudiante=user).select_related('curso').first()
+    if solicitud is None:
+        return _error("No se encontró la inscripción o no te pertenece.", status.HTTP_404_NOT_FOUND)
+    if solicitud.estado != 'ESPERANDO_PAGO' or solicitud.boucher_pago:
+        return _error(
+            "Solo puedes cancelar inscripciones que aún no tienen voucher. Si ya pagaste, comunícate con el INDI.",
+            status.HTTP_400_BAD_REQUEST
+        )
+
+    nombre = solicitud.curso.nombre if solicitud.curso else 'curso'
+    registrar_auditoria(
+        user, "CANCELACIÓN DE INSCRIPCIÓN",
+        f"El estudiante {user.username} canceló su inscripción #{solicitud.id} ({nombre})."
+    )
+    solicitud.delete()
+    return Response({"status": "success", "message": "Inscripción cancelada. Ya puedes elegir otro curso."})
 
 
 def _entregar_archivo(campo, nombre_descarga=None):
@@ -1626,6 +1682,18 @@ def mi_perfil_api(request):
             except ValidationError:
                 return _error("Escribe un correo electrónico válido.", 400)
             user.email = email
+        if 'correo_institucional' in d:
+            ci = str(d.get('correo_institucional') or '').strip().lower()
+            if ci:
+                try:
+                    validate_email(ci)
+                except ValidationError:
+                    return _error("Escribe un correo institucional válido.", 400)
+                if User.objects.filter(correo_institucional__iexact=ci).exclude(id=user.id).exists():
+                    return _error("Ese correo institucional ya está registrado en otra cuenta.", 400)
+                user.correo_institucional = ci
+            else:
+                user.correo_institucional = None
         if 'tipo_postulante' in d:
             tipo = str(d.get('tipo_postulante') or '').upper()
             if tipo not in TIPOS_POSTULANTE:
@@ -1643,6 +1711,7 @@ def mi_perfil_api(request):
         "last_name": user.last_name,
         "role": 'ADMIN' if user.is_superuser else (rol_de(user) or 'STUDENT'),
         "email": user.email,
+        "correo_institucional": user.correo_institucional or "",
         "celular": user.celular,
         "tipo_postulante": user.tipo_postulante,
         "codigo_universitario": user.codigo_universitario,
@@ -1803,9 +1872,11 @@ def materiales_curso_api(request, curso_id):
         curso=curso, tipo=tipo, titulo=titulo, descripcion=descripcion, enlace=enlace,
         archivo=archivo, semana=semana, fecha=fecha, publicado_por=user,
     )
+    avisados = notificar_material_nuevo(material)
     return Response({
         "status": "success",
-        "message": "Material publicado. Tus estudiantes ya pueden verlo.",
+        "message": "Material publicado. Tus estudiantes ya pueden verlo."
+                   + (f" Se avisó por correo a {avisados} estudiante(s)." if avisados else ""),
         "material": _material_a_dict(material),
     }, status=201)
 
@@ -2597,8 +2668,10 @@ def subir_pago_certificado_api(request, request_id):
     if solicitud.status not in (
         CertificateRequest.RequestStatus.AWAITING_PAYMENT,
         CertificateRequest.RequestStatus.PAYMENT_OBSERVED,
+        CertificateRequest.RequestStatus.PAYMENT_REVIEW,  # aún no validado: puede corregir su voucher
     ):
         return _error("Esta solicitud no está esperando un voucher de pago.", status.HTTP_400_BAD_REQUEST)
+    era_correccion = solicitud.status == CertificateRequest.RequestStatus.PAYMENT_REVIEW
 
     archivo = request.FILES.get('voucher_pago')
     if archivo is None:
@@ -2649,14 +2722,54 @@ def subir_pago_certificado_api(request, request_id):
 
     registrar_auditoria(
         user,
-        "PAGO DE CERTIFICADO ENVIADO",
-        f"Solicitud #{solicitud.id}: voucher con operación {numero} enviado a revisión."
+        "PAGO DE CERTIFICADO CORREGIDO" if era_correccion else "PAGO DE CERTIFICADO ENVIADO",
+        f"Solicitud #{solicitud.id}: voucher con operación {numero} "
+        + ("reemplazado por el estudiante antes de la validación." if era_correccion else "enviado a revisión.")
     )
 
     return Response({
         "status": "success",
-        "message": "Voucher enviado. El INDI revisará tu pago.",
+        "message": "Corrección enviada. El INDI revisará tu nuevo voucher." if era_correccion
+                   else "Voucher enviado. El INDI revisará tu pago.",
     }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])  # la autenticación y el propietario se validan dentro
+def cancelar_solicitud_certificado_api(request, request_id):
+    """
+    El estudiante cancela una solicitud de certificado hecha por error (curso equivocado).
+    Solo si aún no tiene un pago en revisión ni validado.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    solicitud = get_object_or_404(CertificateRequest, id=request_id)
+    if solicitud.student_id != user.id:
+        return _error("Solo puedes cancelar tus propias solicitudes.", status.HTTP_403_FORBIDDEN)
+    if solicitud.status not in (
+        CertificateRequest.RequestStatus.AWAITING_PAYMENT,
+        CertificateRequest.RequestStatus.PAYMENT_OBSERVED,
+    ):
+        return _error(
+            "Solo puedes cancelar solicitudes que aún no tienen un pago en revisión o validado. "
+            "Si necesitas ayuda, comunícate con el INDI.",
+            status.HTTP_400_BAD_REQUEST
+        )
+
+    nombre = solicitud.curso.nombre if solicitud.curso else 'certificado'
+    if solicitud.voucher_pago:
+        try:
+            solicitud.voucher_pago.delete(save=False)
+        except Exception:
+            pass
+    registrar_auditoria(
+        user, "CANCELACIÓN DE SOLICITUD DE CERTIFICADO",
+        f"El estudiante {user.username} canceló su solicitud #{solicitud.id} ({nombre})."
+    )
+    solicitud.delete()
+    return Response({"status": "success", "message": "Solicitud cancelada."})
 
 
 @api_view(['GET'])
@@ -2735,6 +2848,9 @@ def revisar_pago_certificado_api(request, request_id):
     if accion == 'observar':
         _, nota_correo = notificar_pago_observado(solicitud)
         mensaje = f"{mensaje} {nota_correo}"
+    else:
+        _, nota_correo = notificar_pago_validado(solicitud)
+        mensaje = f"{mensaje} {nota_correo}"
 
     return Response({"status": "success", "message": mensaje}, status=status.HTTP_200_OK)
 
@@ -2797,6 +2913,19 @@ def correo_del_usuario(user):
     return (getattr(user, 'email', '') or getattr(user, 'correo_institucional', '') or '').strip()
 
 
+def destinatarios_del_usuario(user):
+    """
+    Todos los correos a los que se avisa al usuario: el personal y, si lo tiene, el institucional
+    (sin repetir). Lista vacía si no tiene ninguno.
+    """
+    lista = []
+    for valor in (getattr(user, 'email', ''), getattr(user, 'correo_institucional', '')):
+        valor = (valor or '').strip().lower()
+        if valor and valor not in lista:
+            lista.append(valor)
+    return lista
+
+
 def codigo_certificado_de(solicitud):
     """Código del certificado de una solicitud (misma fórmula que usa la emisión)."""
     return f"INDI-2026-{str(solicitud.language)[:3].upper()}-{solicitud.id:06d}"
@@ -2844,7 +2973,8 @@ def enviar_correo_tramite(destinatario, asunto, titulo, parrafos, boton=None, ad
     """
     try:
         texto, html = _cuerpo_correo(titulo, parrafos, boton)
-        mensaje = EmailMultiAlternatives(asunto, texto, settings.DEFAULT_FROM_EMAIL, [destinatario])
+        para = list(destinatario) if isinstance(destinatario, (list, tuple)) else [destinatario]
+        mensaje = EmailMultiAlternatives(asunto, texto, settings.DEFAULT_FROM_EMAIL, para)
         mensaje.attach_alternative(html, "text/html")
         for nombre, contenido, tipo in (adjuntos or []):
             mensaje.attach(nombre, contenido, tipo)
@@ -2870,7 +3000,7 @@ def _resultado_aviso(destinatario, ok, motivo):
 def notificar_pago_observado(solicitud):
     """Avisa al estudiante que su pago fue observado y qué debe corregir."""
     estudiante = solicitud.student
-    destinatario = correo_del_usuario(estudiante)
+    destinatario = destinatarios_del_usuario(estudiante)
     if not destinatario:
         return _resultado_aviso('', False, '')
 
@@ -2893,7 +3023,7 @@ def notificar_pago_observado(solicitud):
 def notificar_rechazo(solicitud):
     """Avisa al estudiante que su solicitud fue rechazada y por qué."""
     estudiante = solicitud.student
-    destinatario = correo_del_usuario(estudiante)
+    destinatario = destinatarios_del_usuario(estudiante)
     if not destinatario:
         return _resultado_aviso('', False, '')
 
@@ -2919,7 +3049,7 @@ def notificar_certificado_emitido(solicitud, certificado, actor):
     Si falla el correo, el certificado igual queda emitido y se puede reenviar después.
     """
     estudiante = solicitud.student
-    destinatario = correo_del_usuario(estudiante)
+    destinatario = destinatarios_del_usuario(estudiante)
     if not destinatario:
         return False, "El estudiante no tiene un correo registrado: podrá descargarlo desde su portal."
 
@@ -2954,10 +3084,230 @@ def notificar_certificado_emitido(solicitud, certificado, actor):
     registrar_auditoria(
         actor,
         "CERTIFICADO ENVIADO POR CORREO",
-        f"Certificado {certificado.certificate_code} enviado a {destinatario}.",
+        f"Certificado {certificado.certificate_code} enviado a {', '.join(destinatario)}.",
         certificate=certificado,
     )
-    return True, f"Se envió al correo del estudiante ({destinatario})."
+    return True, f"Se envió al correo del estudiante ({', '.join(destinatario)})."
+
+
+def _enviar_lote(lote):
+    for destinatarios, asunto, titulo, parrafos, boton in lote:
+        enviar_correo_tramite(destinatarios, asunto, titulo, parrafos, boton=boton)
+
+
+def enviar_lote(lote):
+    """
+    Envía varios avisos sin hacer esperar a quien los provocó (por ejemplo, un docente que publica
+    material para 30 estudiantes). Con settings.CORREO_EN_SEGUNDO_PLANO = False se envía en el acto.
+    """
+    if not lote:
+        return
+    if getattr(settings, 'CORREO_EN_SEGUNDO_PLANO', True):
+        threading.Thread(target=_enviar_lote, args=(lote,), daemon=True).start()
+    else:
+        _enviar_lote(lote)
+
+
+def _nombre(user):
+    return user.get_full_name() or user.username
+
+
+def notificar_pago_validado(solicitud):
+    """Avisa que el INDI validó el pago del certificado."""
+    estudiante = solicitud.student
+    destinatario = destinatarios_del_usuario(estudiante)
+    if not destinatario:
+        return _resultado_aviso('', False, '')
+    ok, motivo = enviar_correo_tramite(
+        destinatario,
+        f"Tu pago fue validado (solicitud #{solicitud.id})",
+        "Pago validado",
+        [
+            f"Hola {_nombre(estudiante)},",
+            f"El INDI validó tu pago de la solicitud #{solicitud.id} "
+            f"({solicitud.curso.nombre if solicitud.curso else 'certificado'}).",
+            "Tu certificado ya está en trámite. Te avisaremos por este medio cuando esté emitido.",
+        ],
+        boton=("Ver mi solicitud", _enlace_portal('/estudiante/solicitudes')),
+    )
+    return _resultado_aviso(destinatario, ok, motivo)
+
+
+def notificar_matricula_aprobada(solicitud):
+    """Avisa que el pago de la matrícula fue validado y que ya figura como matriculado."""
+    estudiante = solicitud.estudiante
+    destinatario = destinatarios_del_usuario(estudiante)
+    if not destinatario:
+        return _resultado_aviso('', False, '')
+    curso = solicitud.curso
+    detalle = []
+    if curso:
+        detalle.append(f"Curso: {curso.nombre} ({curso.periodo})")
+        detalle.append(f"Modalidad: {'Virtual' if curso.modalidad == 'VIRTUAL' else 'Presencial'}")
+        if curso.horario:
+            detalle.append(f"Horario: {curso.horario}")
+    ok, motivo = enviar_correo_tramite(
+        destinatario,
+        "Tu matrícula fue aprobada",
+        "Matrícula aprobada",
+        [
+            f"Hola {_nombre(estudiante)},",
+            "El INDI validó tu pago y ya estás matriculado.",
+            " · ".join(detalle) if detalle else "Revisa los detalles en tu portal.",
+            "Desde tu portal puedes ver los materiales del curso, tus notas y tus órdenes de pago.",
+        ],
+        boton=("Ir a mi portal", _enlace_portal('/estudiante/materiales')),
+    )
+    return _resultado_aviso(destinatario, ok, motivo)
+
+
+def notificar_matricula_rechazada(solicitud):
+    """Avisa que la matrícula fue rechazada y explica el motivo."""
+    estudiante = solicitud.estudiante
+    destinatario = destinatarios_del_usuario(estudiante)
+    if not destinatario:
+        return _resultado_aviso('', False, '')
+    ok, motivo = enviar_correo_tramite(
+        destinatario,
+        "Tu matrícula fue rechazada",
+        "Matrícula rechazada",
+        [
+            f"Hola {_nombre(estudiante)},",
+            f"El INDI rechazó tu inscripción en {solicitud.curso.nombre if solicitud.curso else 'el curso'}.",
+            f"Motivo: {solicitud.motivo_rechazo}",
+            "Si corresponde, puedes volver a inscribirte y subir un voucher correcto desde tu portal.",
+        ],
+        boton=("Ir a Inscripción a Cursos", _enlace_portal('/estudiante/matricula')),
+    )
+    return _resultado_aviso(destinatario, ok, motivo)
+
+
+def notificar_material_nuevo(material):
+    """Avisa (en segundo plano) a los estudiantes matriculados de que hay material nuevo."""
+    curso = material.curso
+    lote = []
+    matriculas = Matricula.objects.filter(
+        curso=curso, status=Matricula.MatriculaStatus.APPROVED
+    ).select_related('estudiante')
+    for mat in matriculas:
+        est = mat.estudiante
+        destinatario = destinatarios_del_usuario(est)
+        if not destinatario:
+            continue
+        lote.append((
+            destinatario,
+            f"Nuevo material en {curso.nombre}",
+            "Nuevo material en tu curso",
+            [
+                f"Hola {_nombre(est)},",
+                f"Tu docente publicó \"{material.titulo}\" en {curso.nombre}.",
+                f"Tipo: {material.get_tipo_display()}"
+                + (f" · Semana {material.semana}" if material.semana else ""),
+            ],
+            ("Ver materiales", _enlace_portal('/estudiante/materiales')),
+        ))
+    enviar_lote(lote)
+    return len(lote)
+
+
+# ---------- Recuperar contraseña (olvidó su clave) ----------
+
+DURACION_ENLACE_CLAVE = 60 * 60  # el enlace vale 1 hora
+
+
+def _firma_clave(user):
+    """Huella de la clave actual: al cambiarla, el enlace deja de servir (un solo uso)."""
+    return user.password[-12:]
+
+
+def _validar_clave_nueva(user, nueva, confirmar, actual=None):
+    if len(nueva) < 8:
+        return "La nueva contraseña debe tener al menos 8 caracteres."
+    if nueva.isdigit():
+        return "La nueva contraseña no puede ser solo números."
+    if nueva == user.username:
+        return "La nueva contraseña no puede ser igual a tu usuario."
+    if actual is not None and nueva == actual:
+        return "La nueva contraseña debe ser distinta de la actual."
+    if nueva != confirmar:
+        return "La confirmación no coincide con la nueva contraseña."
+    return ''
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def olvide_password_api(request):
+    """
+    Pide un enlace para crear una contraseña nueva. Recibe el DNI (o el correo personal).
+    SIEMPRE responde lo mismo, exista o no la cuenta, para no revelar quién está registrado.
+    """
+    respuesta = Response({
+        "status": "success",
+        "message": "Si los datos coinciden con una cuenta, enviamos un enlace al correo personal registrado. "
+                   "Revisa también tu carpeta de spam. El enlace vale 1 hora.",
+    })
+
+    valor = str(request.data.get('username') or '').strip()
+    if not valor:
+        return _error("Escribe tu DNI o tu correo personal.", status.HTTP_400_BAD_REQUEST)
+
+    if '@' in valor:
+        candidatos = list(User.objects.filter(email__iexact=valor, is_active=True)[:2])
+        user = candidatos[0] if len(candidatos) == 1 else None
+    else:
+        user = User.objects.filter(username=valor, is_active=True).first()
+
+    if user is None or not (user.email or '').strip():
+        return respuesta
+
+    # Máximo un envío por minuto por cuenta
+    if not cache.add(f"olvide_clave:{user.id}", 1, 60):
+        return respuesta
+
+    token = signing.dumps({"u": user.id, "f": _firma_clave(user)}, salt="restablecer-clave")
+    enviar_correo_tramite(
+        user.email.strip(),
+        "Restablece tu contraseña del sistema del INDI",
+        "Restablecer contraseña",
+        [
+            f"Hola {_nombre(user)},",
+            "Recibimos una solicitud para crear una contraseña nueva en tu cuenta.",
+            "El enlace vale 1 hora y solo se puede usar una vez. Si no fuiste tú, ignora este mensaje: "
+            "tu contraseña actual no cambia.",
+        ],
+        boton=("Crear nueva contraseña", _enlace_portal(f"/restablecer?token={token}")),
+    )
+    registrar_auditoria(user, "RECUPERACIÓN DE CONTRASEÑA SOLICITADA", f"Se envió un enlace a {user.email}.")
+    return respuesta
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def restablecer_password_api(request):
+    """Crea la contraseña nueva usando el enlace recibido por correo."""
+    token = str(request.data.get('token') or '')
+    nueva = str(request.data.get('nueva') or '')
+    confirmar = str(request.data.get('confirmar') or '')
+    invalido = "El enlace no es válido o ya venció. Pide uno nuevo desde '¿Olvidaste tu contraseña?'."
+
+    try:
+        datos = signing.loads(token, salt="restablecer-clave", max_age=DURACION_ENLACE_CLAVE)
+    except signing.BadSignature:
+        return _error(invalido, status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(id=datos.get('u'), is_active=True).first()
+    if user is None or datos.get('f') != _firma_clave(user):
+        return _error(invalido, status.HTTP_400_BAD_REQUEST)
+
+    problema = _validar_clave_nueva(user, nueva, confirmar)
+    if problema:
+        return _error(problema, status.HTTP_400_BAD_REQUEST)
+
+    user.set_password(nueva)
+    user.save(update_fields=['password'])
+    registrar_auditoria(user, "CONTRASEÑA RESTABLECIDA POR CORREO", f"El usuario {user.username} creó una contraseña nueva.")
+    return Response({"status": "success", "message": "Listo. Ya puedes iniciar sesión con tu nueva contraseña."})
+
 
 
 @api_view(['POST'])

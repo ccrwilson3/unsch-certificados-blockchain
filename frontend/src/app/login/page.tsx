@@ -137,6 +137,12 @@ export default function LoginPage() {
             </div>
           </div>
 
+          <div className="text-right -mt-2">
+            <a href="/recuperar" className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline">
+              ¿Olvidaste tu contraseña?
+            </a>
+          </div>
+
           <button
             type="submit"
             disabled={loading}

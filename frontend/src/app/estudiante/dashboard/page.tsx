@@ -13,6 +13,7 @@ interface Solicitud {
   monto: number;
   estado: string;
   tiene_voucher: boolean;
+  motivo_rechazo?: string;
   fecha: string;
 }
 
@@ -38,9 +39,11 @@ export default function EstudianteDashboard() {
       const data = await res.json();
       if (res.ok && Array.isArray(data)) {
         setSolicitudes(data);
-        // Si hay una sola orden por pagar, queda elegida
-        const porPagar = data.filter((s: Solicitud) => s.estado === 'ESPERANDO_PAGO');
+        // Si hay una sola orden por pagar o por corregir, queda elegida
+        const porPagar = data.filter((s: Solicitud) => s.estado === 'ESPERANDO_PAGO' || s.estado === 'RECHAZADA');
+        const unicaSubible = data.filter((s: Solicitud) => ['ESPERANDO_PAGO', 'PENDIENTE', 'RECHAZADA'].includes(s.estado));
         if (porPagar.length === 1) setSolicitudSeleccionada(String(porPagar[0].id));
+        else if (unicaSubible.length === 1) setSolicitudSeleccionada(String(unicaSubible[0].id));
       }
     } catch {
       setMensaje({ tipo: 'error', texto: 'No se pudieron cargar tus órdenes.' });
@@ -86,7 +89,7 @@ export default function EstudianteDashboard() {
       const res = await fetch(`${API_URL}/auth/subir-voucher/`, { method: 'POST', body: formData });
       const data = await res.json();
       if (res.ok) {
-        setMensaje({ tipo: 'exito', texto: '¡Voucher enviado! El INDI lo revisará y te matriculará.' });
+        setMensaje({ tipo: 'exito', texto: data.message || '¡Voucher enviado! El INDI lo revisará y te matriculará.' });
         setVoucher(null);
         setSolicitudSeleccionada('');
         fetchSolicitudes();
@@ -106,7 +109,8 @@ export default function EstudianteDashboard() {
   };
 
   // Se puede subir voucher mientras la orden espera pago o está en revisión (para corregirlo)
-  const subibles = solicitudes.filter((s) => s.estado === 'ESPERANDO_PAGO' || s.estado === 'PENDIENTE');
+  const subibles = solicitudes.filter((s) => ['ESPERANDO_PAGO', 'PENDIENTE', 'RECHAZADA'].includes(s.estado));
+  const elegida = solicitudes.find((s) => String(s.id) === solicitudSeleccionada);
 
   const pg = usePaginacion(solicitudes, 8);
 
@@ -153,10 +157,24 @@ export default function EstudianteDashboard() {
                       <option key={s.id} value={s.id}>
                         Orden #{String(s.id).padStart(5, '0')} · {s.curso_nombre} · S/ {s.monto.toFixed(2)}
                         {s.estado === 'PENDIENTE' ? ' (reemplazar voucher)' : ''}
+                        {s.estado === 'RECHAZADA' ? ' (corregir y reenviar)' : ''}
                       </option>
                     ))}
                   </select>
                 </div>
+              )}
+
+              {elegida?.estado === 'RECHAZADA' && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800">
+                  <p className="font-semibold">El INDI rechazó esta matrícula</p>
+                  <p className="mt-0.5">Motivo: {elegida.motivo_rechazo || 'No se especificó un motivo.'}</p>
+                  <p className="mt-1 text-rose-700">Corrige el problema y sube un voucher correcto: tu matrícula volverá a revisión.</p>
+                </div>
+              )}
+              {elegida?.estado === 'PENDIENTE' && (
+                <p className="text-xs text-slate-500">
+                  Esta orden ya tiene un voucher en revisión. Si te equivocaste, súbelo de nuevo y reemplazará al anterior.
+                </p>
               )}
 
               <div>
@@ -177,7 +195,7 @@ export default function EstudianteDashboard() {
                 disabled={loading || !voucher}
                 className="py-2.5 px-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition shadow-sm disabled:opacity-50 cursor-pointer"
               >
-                {loading ? 'Enviando...' : 'Enviar voucher para validación'}
+                {loading ? 'Enviando...' : elegida?.estado === 'RECHAZADA' ? 'Enviar corrección' : 'Enviar voucher para validación'}
               </button>
             </form>
           )}
@@ -214,6 +232,9 @@ export default function EstudianteDashboard() {
                       <td className="p-3 text-slate-600">S/ {s.monto.toFixed(2)}</td>
                       <td className="p-3">
                         <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${est.clase}`}>{est.texto}</span>
+                        {s.estado === 'RECHAZADA' && s.motivo_rechazo && (
+                          <p className="mt-1.5 text-xs text-rose-600 max-w-[220px]">Motivo: {s.motivo_rechazo}</p>
+                        )}
                       </td>
                       <td className="p-3 text-center space-x-2 whitespace-nowrap">
                         {(s.estado === 'ESPERANDO_PAGO' || s.estado === 'PENDIENTE') && (
@@ -223,6 +244,15 @@ export default function EstudianteDashboard() {
                             className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
                           >
                             <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Orden PDF
+                          </button>
+                        )}
+                        {s.estado === 'RECHAZADA' && (
+                          <button
+                            type="button"
+                            onClick={() => { setSolicitudSeleccionada(String(s.id)); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                            className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                          >
+                            Corregir voucher
                           </button>
                         )}
                         {s.tiene_voucher && (

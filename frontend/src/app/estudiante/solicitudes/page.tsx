@@ -147,6 +147,8 @@ export default function SolicitudesEstudiantePage() {
   const [numeros, setNumeros] = useState<Record<number, string>>({});
   const [archivos, setArchivos] = useState<Record<number, File | null>>({});
   const [enviandoPagoId, setEnviandoPagoId] = useState<number | null>(null);
+  const [corrigiendoId, setCorrigiendoId] = useState<number | null>(null);
+  const [cancelandoId, setCancelandoId] = useState<number | null>(null);
 
   useEffect(() => {
     cargarDatos();
@@ -286,7 +288,8 @@ export default function SolicitudesEstudiantePage() {
       const data = await res.json();
 
       if (res.ok) {
-        setMensaje({ tipo: "exito", texto: "¡Voucher enviado! El INDI revisará tu pago." });
+        setMensaje({ tipo: "exito", texto: data.message || "¡Voucher enviado! El INDI revisará tu pago." });
+        setCorrigiendoId(null);
         setNumeros((prev) => ({ ...prev, [id]: "" }));
         setArchivos((prev) => ({ ...prev, [id]: null }));
         await cargarDatos();
@@ -361,6 +364,53 @@ export default function SolicitudesEstudiantePage() {
   const emitidas = solicitudes.filter((s) => s.status === "APPROVED");
   const lista = pestana === "tramite" ? enTramite : emitidas;
   const pg = usePaginacion(lista, 5, pestana);
+
+  // Cancela una solicitud hecha por error (solo si aún no hay un pago en revisión o validado)
+  const handleCancelar = async (id: number) => {
+    setMensaje(null);
+    try {
+      const res = await fetch(`${API_URL}/solicitudes/${id}/cancelar/`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      setCancelandoId(null);
+      if (res.ok) {
+        setMensaje({ tipo: "exito", texto: data.message || "Solicitud cancelada." });
+        await cargarDatos();
+      } else {
+        setMensaje({ tipo: "error", texto: data.message || "No se pudo cancelar la solicitud." });
+      }
+    } catch {
+      setMensaje({ tipo: "error", texto: "Error de conexión con el servidor." });
+    }
+  };
+
+  const botonCancelar = (s: Solicitud) =>
+    cancelandoId === s.id ? (
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-slate-600">¿Cancelar esta solicitud?</span>
+        <button
+          type="button"
+          onClick={() => handleCancelar(s.id)}
+          className="px-3 py-1 bg-rose-600 text-white rounded-lg font-semibold cursor-pointer"
+        >
+          Sí, cancelar
+        </button>
+        <button
+          type="button"
+          onClick={() => setCancelandoId(null)}
+          className="px-3 py-1 border border-slate-200 rounded-lg text-slate-600 cursor-pointer"
+        >
+          No
+        </button>
+      </div>
+    ) : (
+      <button
+        type="button"
+        onClick={() => setCancelandoId(s.id)}
+        className="text-xs font-medium text-slate-500 hover:text-rose-600 underline cursor-pointer"
+      >
+        ¿Elegiste el curso equivocado? Cancelar esta solicitud
+      </button>
+    );
 
   // Formulario para subir el voucher (se muestra cuando el estudiante debe pagar)
   const formularioVoucher = (s: Solicitud) => (
@@ -689,6 +739,7 @@ export default function SolicitudesEstudiantePage() {
                         <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar orden de pago
                       </button>
                       {formularioVoucher(s)}
+                      <div className="pt-3 border-t border-black/5">{botonCancelar(s)}</div>
                     </div>
                   )}
 
@@ -710,11 +761,13 @@ export default function SolicitudesEstudiantePage() {
                         <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar orden de pago
                       </button>
                       {formularioVoucher(s)}
+                      <div className="pt-3 border-t border-black/5">{botonCancelar(s)}</div>
                     </div>
                   )}
 
                   {s.status === "PAYMENT_REVIEW" && (
-                    <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-blue-900">Tu voucher está en revisión</p>
                         <p className="text-xs text-blue-800 mt-1">
@@ -735,6 +788,33 @@ export default function SolicitudesEstudiantePage() {
                       >
                         Ver mi voucher
                       </button>
+                    </div>
+                    <div className="pt-3 border-t border-blue-100">
+                      {corrigiendoId === s.id ? (
+                        <div className="space-y-3">
+                          <p className="text-xs text-blue-900">
+                            Sube el voucher correcto y su número de operación. Reemplazará al anterior y el INDI lo
+                            revisará de nuevo.
+                          </p>
+                          {formularioVoucher(s)}
+                          <button
+                            type="button"
+                            onClick={() => setCorrigiendoId(null)}
+                            className="text-xs font-medium text-slate-500 hover:text-slate-700 underline cursor-pointer"
+                          >
+                            No, dejar mi voucher como está
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setCorrigiendoId(s.id)}
+                          className="text-xs font-semibold text-blue-700 hover:text-blue-900 underline cursor-pointer"
+                        >
+                          ¿Te equivocaste de voucher o de número de operación? Corrígelo
+                        </button>
+                      )}
+                    </div>
                     </div>
                   )}
 

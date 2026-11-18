@@ -103,6 +103,7 @@ class SolicitudMatricula(models.Model):
         null=True,
         help_text="Voucher de Interbank (archivo privado, sin dirección pública)",
     )
+    motivo_rechazo = models.TextField(blank=True, default='', help_text="Motivo que el INDI da al rechazar la matrícula")
     fecha_solicitud = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

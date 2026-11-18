@@ -27,6 +27,13 @@ const ESTADOS: Record<string, { texto: string; clase: string }> = {
   RECHAZADA: { texto: 'Rechazada', clase: 'bg-rose-50 text-rose-700 border-rose-200' },
 };
 
+const MOTIVOS_FRECUENTES = [
+  'Voucher ilegible o borroso',
+  'El monto pagado no coincide',
+  'El voucher no corresponde a este pago',
+  'Voucher duplicado',
+];
+
 const FILTROS = [
   { clave: 'PENDIENTE', texto: 'Por validar' },
   { clave: 'ESPERANDO_PAGO', texto: 'Esperando pago' },
@@ -42,7 +49,8 @@ export default function GestionMatriculasINDI() {
   const [busqueda, setBusqueda] = useState('');
   const [mensaje, setMensaje] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
   const [procesando, setProcesando] = useState<number | null>(null);
-  const [confirmandoRechazo, setConfirmandoRechazo] = useState<number | null>(null);
+  const [rechazando, setRechazando] = useState<Matricula | null>(null);
+  const [motivo, setMotivo] = useState('');
 
   const fetchMatriculas = async () => {
     try {
@@ -61,18 +69,21 @@ export default function GestionMatriculasINDI() {
     fetchMatriculas();
   }, []);
 
-  const handleAccion = async (id: number, accion: 'aprobar' | 'rechazar') => {
+  const handleAccion = async (id: number, accion: 'aprobar' | 'rechazar', motivoRechazo?: string) => {
     setProcesando(id);
-    setConfirmandoRechazo(null);
     try {
       const res = await fetch(`${API_URL}/matriculas/${id}/aprobar/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accion }),
+        body: JSON.stringify({ accion, motivo: motivoRechazo }),
       });
       const data = await res.json();
       setMensaje({ tipo: res.ok ? 'exito' : 'error', texto: data.message || (res.ok ? 'Listo.' : 'No se pudo procesar.') });
-      if (res.ok) fetchMatriculas();
+      if (res.ok) {
+        setRechazando(null);
+        setMotivo('');
+        fetchMatriculas();
+      }
     } catch {
       setMensaje({ tipo: 'error', texto: 'Error de red al procesar la matrícula.' });
     } finally {
@@ -201,23 +212,7 @@ export default function GestionMatriculasINDI() {
                       </td>
                       <td className="p-3 text-center whitespace-nowrap">
                         {m.estado === 'PENDIENTE' && (
-                          confirmandoRechazo === m.id ? (
-                            <span className="space-x-2">
-                              <span className="text-xs text-slate-500">¿Rechazar?</span>
-                              <button
-                                onClick={() => handleAccion(m.id, 'rechazar')}
-                                className="bg-rose-600 text-white px-3 py-1 rounded-lg text-xs font-semibold cursor-pointer"
-                              >
-                                Sí
-                              </button>
-                              <button
-                                onClick={() => setConfirmandoRechazo(null)}
-                                className="px-3 py-1 rounded-lg text-xs border cursor-pointer"
-                              >
-                                No
-                              </button>
-                            </span>
-                          ) : (
+                          (
                             <span className="space-x-2">
                               <button
                                 disabled={procesando === m.id}
@@ -228,7 +223,7 @@ export default function GestionMatriculasINDI() {
                               </button>
                               <button
                                 disabled={procesando === m.id}
-                                onClick={() => setConfirmandoRechazo(m.id)}
+                                onClick={() => { setRechazando(m); setMotivo(''); }}
                                 className="bg-rose-50 text-rose-700 border border-rose-200 px-3 py-1 rounded-lg text-xs hover:bg-rose-100 transition font-semibold disabled:opacity-50 cursor-pointer"
                               >
                                 Rechazar
@@ -246,6 +241,66 @@ export default function GestionMatriculasINDI() {
         )}
         {!loading && <Paginador pg={pg} acento="amber" />}
       </div>
+
+      {rechazando && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/50 overflow-y-auto"
+          style={{ marginTop: 0 }}
+          onMouseDown={(e) => { if (e.target === e.currentTarget && procesando === null) setRechazando(null); }}
+        >
+          <div className="min-h-full flex items-center justify-center p-4">
+            <div role="dialog" aria-modal="true" className="bg-white rounded-2xl shadow-xl w-full max-w-md border border-slate-200 p-6">
+              <h2 className="text-lg font-bold text-slate-800">Rechazar matrícula</h2>
+              <p className="text-xs text-slate-500 mt-1">
+                {rechazando.estudiante} · {rechazando.curso_nombre}
+              </p>
+
+              <label className="block text-xs font-semibold text-slate-600 mt-4 mb-1">
+                Motivo del rechazo (el estudiante lo verá y le llegará por correo)
+              </label>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {MOTIVOS_FRECUENTES.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setMotivo(t)}
+                    className="px-2.5 py-1 rounded-full border border-slate-200 text-[11px] font-medium text-slate-600 hover:bg-amber-50 hover:border-amber-300 cursor-pointer"
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={motivo}
+                onChange={(e) => setMotivo(e.target.value.slice(0, 300))}
+                rows={3}
+                autoFocus
+                placeholder="Ej. El voucher está borroso, vuelve a subirlo."
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500 resize-none"
+              />
+              <p className="text-[11px] text-slate-400 text-right mt-1">{motivo.length}/300</p>
+
+              <div className="flex justify-end gap-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => setRechazando(null)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={motivo.trim().length < 5 || procesando === rechazando.id}
+                  onClick={() => handleAccion(rechazando.id, 'rechazar', motivo.trim())}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                >
+                  {procesando === rechazando.id ? 'Rechazando...' : 'Rechazar matrícula'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

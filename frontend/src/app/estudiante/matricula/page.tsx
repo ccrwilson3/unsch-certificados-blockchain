@@ -16,6 +16,7 @@ interface Inscripcion {
   monto: number;
   estado: string;
   tiene_voucher: boolean;
+  motivo_rechazo?: string;
   fecha: string;
 }
 
@@ -36,6 +37,23 @@ export default function InscripcionCursosPage() {
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
   const [nuevaOrden, setNuevaOrden] = useState<number | null>(null);
+  const [confirmandoCancelar, setConfirmandoCancelar] = useState<number | null>(null);
+
+  const cancelarInscripcion = async (id: number) => {
+    setMensaje(null);
+    try {
+      const res = await fetch(`${API_URL}/matriculas/${id}/cancelar/`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      setConfirmandoCancelar(null);
+      setMensaje({ tipo: res.ok ? 'exito' : 'error', texto: data.message || (res.ok ? 'Inscripción cancelada.' : 'No se pudo cancelar.') });
+      if (res.ok) {
+        setNuevaOrden(null);
+        await cargarDatos();
+      }
+    } catch {
+      setMensaje({ tipo: 'error', texto: 'Error de red al cancelar.' });
+    }
+  };
 
   const cargarDatos = async () => {
     try {
@@ -222,6 +240,9 @@ export default function InscripcionCursosPage() {
                       <td className="p-3 text-slate-600">S/ {m.monto.toFixed(2)}</td>
                       <td className="p-3">
                         <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${est.clase}`}>{est.texto}</span>
+                        {m.estado === 'RECHAZADA' && m.motivo_rechazo && (
+                          <p className="mt-1.5 text-xs text-rose-600 max-w-[220px]">Motivo: {m.motivo_rechazo}</p>
+                        )}
                       </td>
                       <td className="p-3 text-center space-x-2 whitespace-nowrap">
                         {(m.estado === 'ESPERANDO_PAGO' || m.estado === 'PENDIENTE') && (
@@ -249,6 +270,43 @@ export default function InscripcionCursosPage() {
                           >
                             Subir voucher
                           </Link>
+                        )}
+                        {m.estado === 'RECHAZADA' && (
+                          <Link
+                            href="/estudiante/dashboard"
+                            className="inline-block px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold"
+                          >
+                            Corregir y reenviar
+                          </Link>
+                        )}
+                        {m.estado === 'ESPERANDO_PAGO' && !m.tiene_voucher && (
+                          confirmandoCancelar === m.id ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="text-xs text-slate-500">¿Cancelar?</span>
+                              <button
+                                type="button"
+                                onClick={() => cancelarInscripcion(m.id)}
+                                className="px-2.5 py-1 bg-rose-600 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                              >
+                                Sí
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmandoCancelar(null)}
+                                className="px-2.5 py-1 border border-slate-200 rounded-lg text-xs cursor-pointer"
+                              >
+                                No
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmandoCancelar(m.id)}
+                              className="px-3 py-1.5 text-slate-500 hover:text-rose-600 text-xs font-medium underline cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                          )
                         )}
                       </td>
                     </tr>

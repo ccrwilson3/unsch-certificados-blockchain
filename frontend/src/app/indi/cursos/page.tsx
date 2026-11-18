@@ -383,7 +383,7 @@ export default function GestionCursosINDI() {
 
       {/* MODAL EDITAR CURSO */}
       {cursoEditando && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" style={{ marginTop: 0 }}>
           <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-200">
             <h2 className="text-lg font-bold text-slate-800 mb-1">Editar Curso</h2>
             <p className="text-xs text-slate-500 mb-4">

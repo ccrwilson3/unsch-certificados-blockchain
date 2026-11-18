@@ -308,7 +308,7 @@ export default function AdminUsuariosPage() {
 
       {/* MODAL REGISTRAR USUARIO */}
       {modalAbierto && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" style={{ marginTop: 0 }}>
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200">
             <h2 className="text-lg font-bold text-slate-800 mb-1">Registrar Nuevo Usuario</h2>
             <p className="text-xs text-slate-500 mb-4">Ingresa el DNI (8 dígitos) y credenciales institucionales.</p>
@@ -411,7 +411,7 @@ export default function AdminUsuariosPage() {
 
       {/* MODAL EDITAR USUARIO / ROL */}
       {modalEditarAbierto && usuarioEditando && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" style={{ marginTop: 0 }}>
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200">
             <h2 className="text-lg font-bold text-slate-800 mb-1">Editar Usuario y Rol</h2>
             <p className="text-xs text-slate-500 mb-4">
@@ -472,7 +472,7 @@ export default function AdminUsuariosPage() {
 
       {/* MODAL RESETEAR CONTRASEÑA */}
       {modalResetAbierto && usuarioSeleccionado && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" style={{ marginTop: 0 }}>
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200">
             <h2 className="text-lg font-bold text-slate-800 mb-1">Restablecer Contraseña</h2>
             <p className="text-xs text-slate-500 mb-4">

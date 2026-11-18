@@ -15,6 +15,7 @@ interface Perfil {
   last_name: string;
   role: string;
   email: string;
+  correo_institucional?: string;
   celular: string;
 }
 
@@ -50,6 +51,7 @@ export default function CuentaDialog({
 
   // Datos de contacto
   const [email, setEmail] = useState("");
+  const [correoInst, setCorreoInst] = useState("");
   const [celular, setCelular] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [avisoDatos, setAvisoDatos] = useState<Aviso>(null);
@@ -80,6 +82,7 @@ export default function CuentaDialog({
         if (r.ok) {
           setPerfil(d);
           setEmail(d.email || "");
+          setCorreoInst(d.correo_institucional || "");
           setCelular(d.celular || "");
         } else {
           setAvisoDatos({ tipo: "error", texto: d.message || "No se pudieron cargar tus datos." });
@@ -97,7 +100,7 @@ export default function CuentaDialog({
       const res = await fetch(`${API_URL}/perfil/`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, celular }),
+        body: JSON.stringify({ email, celular, correo_institucional: correoInst }),
       });
       const d = await res.json();
       setAvisoDatos(
@@ -156,7 +159,7 @@ export default function CuentaDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm overflow-y-auto"
+      className="fixed inset-0 z-[60] bg-slate-900/50 overflow-y-auto"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onCerrar();
       }}
@@ -239,6 +242,21 @@ export default function CuentaDialog({
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Correo institucional <span className="font-normal text-slate-400">(opcional)</span>
+                  </label>
+                  <input
+                    type="email"
+                    className={campo}
+                    placeholder="apellido.nombre@cidie.edu.pe"
+                    value={correoInst}
+                    onChange={(e) => setCorreoInst(e.target.value)}
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Si el instituto ya te creó uno, escríbelo aquí: te llegarán los avisos a ambos correos.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Celular (9 dígitos)</label>
