@@ -22,6 +22,7 @@ from django.core.validators import validate_email
 from django.utils.html import escape
 from django.utils import timezone
 from django.db import models, transaction
+from django.db.models import Q
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -186,6 +187,7 @@ def consultar_logs_auditoria(request):
             "certificate_code": log.certificate.certificate_code if log.certificate else None,
             "timestamp": log.timestamp.isoformat(),
             "details": log.details or "",
+            "ip_address": log.ip_address or "",
         })
 
     return Response(data, status=status.HTTP_200_OK)
@@ -976,14 +978,41 @@ def _login_limpiar(request, username):
 # LOGIN
 # ==========================================================
 
+def _resolver_identificador(identificador):
+    """
+    Permite ingresar con usuario, DNI o correo. Devuelve el usuario encontrado o None.
+    Si un correo/DNI coincide con más de una cuenta no se adivina: se devuelve None.
+    """
+    ident = str(identificador or '').strip()
+    if not ident:
+        return None
+    u = User.objects.filter(username=ident).first()
+    if u:
+        return u
+    if '@' in ident:
+        candidatos = list(User.objects.filter(
+            Q(email__iexact=ident) | Q(correo_institucional__iexact=ident)
+        )[:2])
+    elif ident.isdigit():
+        candidatos = list(User.objects.filter(dni=ident)[:2])
+    else:
+        candidatos = list(User.objects.filter(username__iexact=ident)[:2])
+    return candidatos[0] if len(candidatos) == 1 else None
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login_view(request):
-    username = request.data.get('username')
+    escrito = str(request.data.get('username') or '').strip()[:150]
     password = request.data.get('password')
 
-    if not username or not password:
+    if not escrito or not password:
         return Response({"detail": "Usuario y contraseña son requeridos."}, status=400)
+
+    # Usuario, DNI o correo -> cuenta real. El bloqueo por intentos se cuenta sobre la cuenta,
+    # así no se puede evitar probando la misma cuenta con distintas formas de ingresar.
+    encontrado = _resolver_identificador(escrito)
+    username = encontrado.username if encontrado else escrito
 
     if _login_bloqueado(request, username):
         return Response({
@@ -996,6 +1025,7 @@ def login_view(request):
         if not user.is_active:
             return Response({"detail": "La cuenta se encuentra inactiva."}, status=403)
         _login_limpiar(request, username)
+        registrar_auditoria(user, "INICIO DE SESIÓN", "Ingreso al sistema.")
 
         # 1. Obtener el rol guardado en la base de datos (si existe)
         db_role = getattr(user, 'role', None)
@@ -1018,6 +1048,7 @@ def login_view(request):
         }, status=200)
     else:
         _login_registrar_fallo(request, username)
+        registrar_auditoria(None, "INTENTO FALLIDO DE ACCESO", f"Credenciales inválidas para: {escrito[:60]}")
         return Response({"detail": "Credenciales inválidas."}, status=400)
 
 

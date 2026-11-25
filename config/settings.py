@@ -63,6 +63,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'certificates.contexto.IPAuditoriaMiddleware',  # anota la IP en la auditoría
 ]
 
 ROOT_URLCONF = 'config.urls'

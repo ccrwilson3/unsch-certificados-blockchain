@@ -357,6 +357,16 @@ class AuditLog(models.Model):
     certificate = models.ForeignKey(Certificate, on_delete=models.SET_NULL, null=True, blank=True, related_name='logs', verbose_name="Certificado Afectado")
     timestamp = models.DateTimeField(auto_now_add=True, verbose_name="Fecha y Hora")
     details = models.TextField(blank=True, null=True, verbose_name="Detalles de la Acción")
+    ip_address = models.GenericIPAddressField(null=True, blank=True, verbose_name="Dirección IP")
+
+    def save(self, *args, **kwargs):
+        # Al crear el registro se anota la IP de la petición en curso (la pone el middleware).
+        if self._state.adding and not self.ip_address:
+            from .contexto import ip_actual
+            ip = ip_actual.get()
+            if ip:
+                self.ip_address = ip
+        super().save(*args, **kwargs)
 
     def __str__(self):
         user_str = self.performed_by.username if self.performed_by else "Sistema"

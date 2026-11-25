@@ -14,6 +14,7 @@ interface AuditLog {
   certificate_code: string | null;
   timestamp: string;
   details: string;
+  ip_address?: string;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
@@ -41,7 +42,7 @@ const estiloAccion = (accion: string) => {
   ) {
     return "bg-emerald-50 text-emerald-700 border border-emerald-200";
   }
-  if (a.startsWith("REVOCACION") || a.startsWith("RECHAZO") || a.startsWith("DESACTIVACION")) {
+  if (a.startsWith("REVOCACION") || a.startsWith("INTENTO") || a.startsWith("RECHAZO") || a.startsWith("DESACTIVACION")) {
     return "bg-rose-50 text-rose-700 border border-rose-200";
   }
   if (a.startsWith("RESTABLECIMIENTO") || a.startsWith("EDICION")) {
@@ -102,7 +103,8 @@ export default function AuditoriaPage() {
       log.performed_by.toLowerCase().includes(texto) ||
       log.performed_by_username.toLowerCase().includes(texto) ||
       log.details.toLowerCase().includes(texto) ||
-      (log.certificate_code || "").toLowerCase().includes(texto);
+      (log.certificate_code || "").toLowerCase().includes(texto) ||
+      (log.ip_address || "").includes(texto);
 
     const coincideAccion = filtroAccion === "TODAS" || log.action === filtroAccion;
 
@@ -151,7 +153,7 @@ export default function AuditoriaPage() {
       {/* FILTROS */}
       <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <label className="block text-xs font-semibold text-slate-600 mb-1">Buscar por usuario, detalle o certificado</label>
+          <label className="block text-xs font-semibold text-slate-600 mb-1">Buscar por usuario, detalle, certificado o IP</label>
           <input
             type="text"
             placeholder="Ej. 98745621, INDI-2026..."
@@ -209,6 +211,7 @@ export default function AuditoriaPage() {
                   <th className="p-4">Acción</th>
                   <th className="p-4">Certificado</th>
                   <th className="p-4">Detalle de Operación</th>
+                  <th className="p-4">IP</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
@@ -246,11 +249,12 @@ export default function AuditoriaPage() {
                         )}
                       </td>
                       <td className="p-4 text-slate-600 text-xs">{log.details || "Sin detalles adicionales"}</td>
+                      <td className="p-4 text-xs text-slate-500 font-mono whitespace-nowrap">{log.ip_address || "—"}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={5} className="p-8 text-center text-slate-500">
+                    <td colSpan={6} className="p-8 text-center text-slate-500">
                       No se encontraron registros que coincidan con los filtros seleccionados.
                     </td>
                   </tr>

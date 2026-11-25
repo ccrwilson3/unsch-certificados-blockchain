@@ -1,9 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+type Modo = "dni" | "correo" | "usuario";
+
+interface Reciente {
+  modo: Modo;
+  valor: string;
+  nombre: string;
+}
+
+const CLAVE_RECIENTES = "login_recientes"; // solo se guardan datos de acceso públicos, nunca la contraseña
+const MAX_RECIENTES = 6;
+
+const MODOS: { id: Modo; etiqueta: string; titulo: string; ejemplo: string }[] = [
+  { id: "dni", etiqueta: "DNI", titulo: "Número de DNI", ejemplo: "12345678" },
+  { id: "correo", etiqueta: "Correo", titulo: "Correo electrónico", ejemplo: "nombre@correo.com" },
+  { id: "usuario", etiqueta: "Usuario", titulo: "Nombre de usuario", ejemplo: "usuario" },
+];
+
+const leerRecientes = (): Reciente[] => {
+  try {
+    const lista = JSON.parse(localStorage.getItem(CLAVE_RECIENTES) || "[]");
+    return Array.isArray(lista) ? lista : [];
+  } catch {
+    return [];
+  }
+};
+
+const guardarRecientes = (lista: Reciente[]) => {
+  try {
+    localStorage.setItem(CLAVE_RECIENTES, JSON.stringify(lista));
+  } catch {
+    /* sin almacenamiento disponible: no pasa nada */
+  }
+};
+
 export default function LoginPage() {
+  const [modo, setModo] = useState<Modo>("dni");
+  const [recientes, setRecientes] = useState<Reciente[]>([]);
+  const claveRef = useRef<HTMLInputElement>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false); // nuevo
@@ -11,10 +48,50 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  // Cargar el historial y el último modo usado (solo en el navegador)
+  useEffect(() => {
+    setRecientes(leerRecientes());
+    try {
+      const ultimo = localStorage.getItem("login_modo") as Modo | null;
+      if (ultimo === "dni" || ultimo === "correo" || ultimo === "usuario") setModo(ultimo);
+    } catch {
+      /* ignorar */
+    }
+  }, []);
+
+  const cambiarModo = (nuevo: Modo) => {
+    setModo(nuevo);
+    setUsername("");
+    setError("");
+  };
+
+  const usarReciente = (r: Reciente) => {
+    setModo(r.modo);
+    setUsername(r.valor);
+    setError("");
+    claveRef.current?.focus();
+  };
+
+  const quitarReciente = (r: Reciente) => {
+    const nueva = recientes.filter((x) => !(x.modo === r.modo && x.valor === r.valor));
+    setRecientes(nueva);
+    guardarRecientes(nueva);
+  };
+
+  const borrarHistorial = () => {
+    setRecientes([]);
+    guardarRecientes([]);
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError("");
+
+    if (modo === "dni" && !/^\d{8}$/.test(username)) {
+      setError("El DNI debe tener exactamente 8 dígitos.");
+      return;
+    }
+    setLoading(true);
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
@@ -27,12 +104,19 @@ export default function LoginPage() {
 
       const data = await res.json();
 
-      // <--- AGREGA ESTA LÍNEA PARA VER QUÉ DEVUELVE EL BACKEND EN LA CONSOLA DEL NAVEGADOR --->
-      console.log("Respuesta completa del login:", data);
-
       if (!res.ok) {
         setError(data.detail || data.error || "Credenciales incorrectas.");
         return;
+      }
+
+      // Recordar este acceso en el historial (el más reciente primero, sin repetidos)
+      const nombre = `${data.first_name || ""} ${data.last_name || ""}`.trim();
+      const nuevo: Reciente = { modo, valor: username, nombre };
+      guardarRecientes([nuevo, ...recientes.filter((x) => !(x.modo === modo && x.valor === username))].slice(0, MAX_RECIENTES));
+      try {
+        localStorage.setItem("login_modo", modo);
+      } catch {
+        /* ignorar */
       }
 
       // Guardamos la sesión localmente
@@ -85,20 +169,38 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Ingresar con</label>
+            <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl mb-3" role="tablist">
+              {MODOS.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={modo === m.id}
+                  onClick={() => cambiarModo(m.id)}
+                  className={`py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                    modo === m.id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  {m.etiqueta}
+                </button>
+              ))}
+            </div>
+
             <label className="block text-xs font-semibold text-slate-600 mb-1">
-              Usuario / DNI
+              {MODOS.find((m) => m.id === modo)?.titulo}
             </label>
             <input
-              type="text"
+              key={modo}
+              type={modo === "correo" ? "email" : "text"}
+              inputMode={modo === "dni" ? "numeric" : modo === "correo" ? "email" : "text"}
               required
-              maxLength={8} // <--- Limita a máximo 8 caracteres
+              maxLength={modo === "dni" ? undefined : 100}
+              autoComplete="username"
+              autoCapitalize="none"
               value={username}
-              // Filtra para permitir únicamente números (0-9) y corta a 8 caracteres
-              onChange={(e) => {
-                const val = e.target.value.replace(/\D/g, "").slice(0, 8);
-                setUsername(val);
-              }}
-              placeholder="Ej. 12345678"
+              onChange={(e) => setUsername(modo === "dni" ? e.target.value.replace(/\D/g, "").slice(0, 8) : e.target.value.trim())}
+              placeholder={`Ej. ${MODOS.find((m) => m.id === modo)?.ejemplo}`}
               className="w-full px-4 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -111,6 +213,7 @@ export default function LoginPage() {
               <input
                 type={showPassword ? "text" : "password"} // <--- Cambia dinámicamente según el estado
                 required
+                ref={claveRef}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
@@ -151,6 +254,45 @@ export default function LoginPage() {
             {loading ? "Iniciando Sesión..." : "Iniciar Sesión"}
           </button>
         </form>
+
+        {recientes.length > 0 && (
+          <div className="mt-5 border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-slate-500">Accesos recientes en este equipo</span>
+              <button
+                type="button"
+                onClick={borrarHistorial}
+                className="text-[11px] text-slate-400 hover:text-rose-600 hover:underline"
+              >
+                Borrar historial
+              </button>
+            </div>
+            <ul className="space-y-1.5">
+              {recientes.map((r) => (
+                <li key={`${r.modo}:${r.valor}`} className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => usarReciente(r)}
+                    className="flex-1 min-w-0 text-left px-3 py-2 text-xs rounded-lg border border-slate-200 hover:bg-blue-50 hover:border-blue-200 transition-colors"
+                  >
+                    <span className="block font-medium text-slate-700 truncate">{r.nombre || r.valor}</span>
+                    <span className="block text-slate-400 font-mono truncate">
+                      {MODOS.find((m) => m.id === r.modo)?.etiqueta}: {r.valor}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => quitarReciente(r)}
+                    aria-label={`Quitar ${r.valor} del historial`}
+                    className="px-2 py-1 text-slate-300 hover:text-rose-600"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="mt-6 text-center border-t border-slate-100 pt-4">
           <a href="/" className="text-xs text-slate-500 hover:text-slate-800 transition-colors">
