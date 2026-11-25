@@ -34,9 +34,10 @@ from reportlab.lib.pagesizes import letter
 
 from .models import (
     Certificate, CertificateRequest, AuditLog, Curso, Matricula,
-    Evaluacion, Calificacion, SolicitudMatricula, Material, Asistencia,
+    Evaluacion, Calificacion, SolicitudMatricula, Material, Asistencia, ActaNotas,
 )
 from .utils import generar_pdf_certificado
+from . import actas as acta_logica
 from .blockchain import (
     consultar_certificado_blockchain, emitir_hash_blockchain,
     revocar_hash_blockchain, BlockchainError,
@@ -458,6 +459,30 @@ def verificar_certificado_publico(request, certificate_code):
 # SOLICITUDES DE CERTIFICADO
 # ==========================================================
 
+def _info_acta_de_solicitud(solicitud, cache_actas):
+    """
+    Estado del acta del curso de la solicitud y la nota que el acta firmada tiene para ese estudiante,
+    para que el INDI compare antes de emitir el certificado.
+    """
+    vacio = {"acta_estado": None, "acta_codigo": None, "nota_en_acta": None, "acta_integridad": None}
+    if not solicitud.curso_id:
+        return vacio
+    if solicitud.curso_id not in cache_actas:
+        acta = ActaNotas.objects.filter(curso_id=solicitud.curso_id).first()
+        cache_actas[solicitud.curso_id] = (acta, acta_logica.integridad(solicitud.curso, acta) if acta else None)
+    acta, integridad = cache_actas[solicitud.curso_id]
+    if acta is None:
+        return {**vacio, "acta_estado": "SIN_ACTA"}
+    dni = str(getattr(solicitud.student, 'dni', None) or solicitud.student.username)
+    fila = next((e for e in (acta.snapshot or {}).get('estudiantes', []) if e['dni'] == dni), None)
+    return {
+        "acta_estado": acta.estado,
+        "acta_codigo": acta.codigo,
+        "nota_en_acta": float(fila['promedio']) if fila and fila.get('promedio') else None,
+        "acta_integridad": integridad,
+    }
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])  # la autenticación y el rol se validan dentro
 def gestionar_solicitudes_estudiante(request):
@@ -533,6 +558,7 @@ def gestionar_solicitudes_estudiante(request):
                 )
                 promedios[(est_id, curso_id)] = promedio
 
+        info_actas = {}
         data = []
         for s in solicitudes:
             promedio = promedios.get((s.student_id, s.curso_id))
@@ -562,6 +588,7 @@ def gestionar_solicitudes_estudiante(request):
                 "atrasada": bool(limite and hoy_peru() > limite),
                 "certificate_code": codigo_real if codigo_real in certificados_por_codigo else None,
                 "certificate_status": certificados_por_codigo.get(codigo_real),
+                **_info_acta_de_solicitud(s, info_actas),
             })
 
         return JsonResponse(data, safe=False)
@@ -742,6 +769,25 @@ def aprobar_solicitud_certificado_api(request, request_id):
                 "status": "success",
                 "message": f"Solicitud #{request_id} rechazada correctamente. {nota_correo}"
             }, status=status.HTTP_200_OK)
+
+        # El acta de notas del curso respalda la emisión: si fue alterada no se emite;
+        # si es obligatoria (ACTA_OBLIGATORIA_PARA_CERTIFICADO) debe estar firmada por la Dirección.
+        if solicitud.curso_id:
+            acta_curso = ActaNotas.objects.filter(curso_id=solicitud.curso_id).first()
+            if acta_curso and acta_logica.integridad(solicitud.curso, acta_curso) == 'ALTERADA':
+                return Response({
+                    "status": "error",
+                    "message": "Las notas del curso no coinciden con el acta firmada (posible alteración). "
+                               "No se puede emitir el certificado hasta aclararlo.",
+                }, status=status.HTTP_409_CONFLICT)
+            if getattr(settings, 'ACTA_OBLIGATORIA_PARA_CERTIFICADO', False) and (
+                acta_curso is None or acta_curso.estado != ActaNotas.Estado.CERRADA
+            ):
+                return Response({
+                    "status": "error",
+                    "message": "El acta de notas de este curso aún no está firmada por la Dirección del INDI. "
+                               "Firma el acta antes de emitir el certificado.",
+                }, status=status.HTTP_409_CONFLICT)
 
         # --- FLUJO DE APROBACIÓN Y BLOCKCHAIN ---
         codigo_unico = f"INDI-2026-{str(solicitud.language)[:3].upper()}-{solicitud.id:06d}"
@@ -1315,6 +1361,17 @@ def _leer_faltas(valor):
     return n, None
 
 
+def _leer_fecha_fin(valor):
+    """Fecha de culminación del curso: vacío = sin fecha. Devuelve (fecha|None, error|None)."""
+    texto = str(valor or '').strip()
+    if not texto:
+        return None, None
+    try:
+        return datetime.strptime(texto, '%Y-%m-%d').date(), None
+    except ValueError:
+        return None, "La fecha de culminación debe tener el formato AAAA-MM-DD."
+
+
 def _curso_a_dict(c):
     """Forma única en que la API entrega un curso (la usan el catálogo, el registro y la inscripción)."""
     ocupados, disponibles = cupos_info(c)
@@ -1324,6 +1381,7 @@ def _curso_a_dict(c):
         "cupos_disponibles": disponibles,
         "cupos_agotados": disponibles == 0,
         "faltas_permitidas": c.faltas_permitidas,
+        "fecha_fin": c.fecha_fin.isoformat() if c.fecha_fin else None,
         "id": c.id,
         "nombre": c.nombre,
         "language": c.language,
@@ -1370,6 +1428,9 @@ def gestionar_cursos_api(request):
     faltas, err = _leer_faltas(datos.get('faltas_permitidas', 2))
     if err:
         return _error(err, status.HTTP_400_BAD_REQUEST)
+    fecha_fin, err = _leer_fecha_fin(datos.get('fecha_fin'))
+    if err:
+        return _error(err, status.HTTP_400_BAD_REQUEST)
 
     if language not in Curso.Language.values:
         return _error("Selecciona un idioma válido.", status.HTTP_400_BAD_REQUEST)
@@ -1401,7 +1462,7 @@ def gestionar_cursos_api(request):
     curso = Curso.objects.create(
         nombre=nombre, language=language, level=level, subnivel=subnivel, periodo=periodo,
         modalidad=modalidad, horario=horario, docente=docente,
-        cupos=cupos, faltas_permitidas=faltas,
+        cupos=cupos, faltas_permitidas=faltas, fecha_fin=fecha_fin,
     )
 
     registrar_auditoria(
@@ -2261,6 +2322,7 @@ def cursos_del_docente_api(request):
         "total_matriculados": c.total_matriculados,
         "cupos": c.cupos,
         "faltas_permitidas": c.faltas_permitidas,
+        "fecha_fin": c.fecha_fin.isoformat() if c.fecha_fin else None,
     } for c in cursos]
 
     return Response(data, status=status.HTTP_200_OK)
@@ -2286,6 +2348,12 @@ def gestionar_evaluaciones_y_notas_api(request, curso_id):
     es_docente_del_curso = (rol_de(user) == 'DOCENTE' and curso.docente_id == user.id)
     if not (es_docente_del_curso or es_personal_indi(user)):
         return _error("No tienes permisos sobre este curso.", status.HTTP_403_FORBIDDEN)
+
+    # Con el acta firmada (o vencido el plazo) las evaluaciones tampoco se pueden cambiar
+    if request.method in ('POST', 'DELETE'):
+        bloqueo = acta_logica.motivo_bloqueo_notas(curso)
+        if bloqueo:
+            return _error(bloqueo, status.HTTP_423_LOCKED)
 
     def peso_total_actual():
         total = Evaluacion.objects.filter(curso=curso).aggregate(
@@ -2497,7 +2565,11 @@ def gestionar_notas_curso_api(request, curso_id):
         }, status=status.HTTP_200_OK)
 
     # ------------------------------------------------------
-    # PUT: guardar notas
+    # PUT: guardar notas (no se puede si el acta ya está firmada o venció el plazo)
+    bloqueo = acta_logica.motivo_bloqueo_notas(curso)
+    if bloqueo:
+        return _error(bloqueo, status.HTTP_423_LOCKED)
+
     datos = request.data.get('notas')
     if not isinstance(datos, list) or not datos:
         return _error("No se enviaron notas para guardar.", status.HTTP_400_BAD_REQUEST)
@@ -2720,6 +2792,14 @@ def editar_curso_api(request, curso_id):
         if faltas != curso.faltas_permitidas:
             cambios.append(f"faltas permitidas: {curso.faltas_permitidas} → {faltas}")
             curso.faltas_permitidas = faltas
+
+    if 'fecha_fin' in datos:
+        fecha_fin, err = _leer_fecha_fin(datos.get('fecha_fin'))
+        if err:
+            return _error(err, status.HTTP_400_BAD_REQUEST)
+        if fecha_fin != curso.fecha_fin:
+            cambios.append(f"fecha de culminación: {curso.fecha_fin or 'sin fecha'} → {fecha_fin or 'sin fecha'}")
+            curso.fecha_fin = fecha_fin
 
     if 'docente_id' in datos:
         docente_id = datos.get('docente_id')

@@ -31,6 +31,10 @@ interface Solicitud {
   certificado_enviado_en?: string | null;
   fecha_limite?: string | null;
   atrasada?: boolean;
+  acta_estado?: string | null;
+  acta_codigo?: string | null;
+  nota_en_acta?: number | null;
+  acta_integridad?: "INTEGRA" | "ALTERADA" | null;
 }
 
 type Etapa = "TODAS" | "REVISAR_PAGO" | "EMITIR" | "ESPERANDO" | "EMITIDOS" | "RECHAZADAS";
@@ -429,6 +433,25 @@ export default function AprobarSolicitudesPage() {
                                     </span>
                                   </>
                                 )}
+                                <div className="mt-1">
+                                  {s.acta_integridad === "ALTERADA" ? (
+                                    <span className="font-bold text-rose-600">Acta: notas alteradas, no emitir</span>
+                                  ) : s.acta_estado === "CERRADA" ? (
+                                    <span className="font-semibold text-emerald-700">
+                                      Acta firmada{s.nota_en_acta !== null && s.nota_en_acta !== undefined ? ` · nota en acta: ${Number(s.nota_en_acta)}` : ""}
+                                    </span>
+                                  ) : (
+                                    <span className="text-amber-700">
+                                      {s.acta_estado === "SIN_ACTA" || !s.acta_estado ? "Acta sin firmar" : "Acta en proceso (aún no cerrada)"}
+                                    </span>
+                                  )}
+                                  {s.curso_id ? (
+                                    <>
+                                      {" · "}
+                                      <a href={`/indi/actas/${s.curso_id}`} className="text-blue-600 hover:underline">ver acta</a>
+                                    </>
+                                  ) : null}
+                                </div>
                               </div>
                             ) : (
                               <div className="text-xs text-amber-600 font-normal mt-0.5">

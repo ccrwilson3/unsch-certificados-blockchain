@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import views, actas_api
 from .views import login_view
 
 urlpatterns = [
@@ -46,6 +46,11 @@ urlpatterns = [
     path('cursos/<int:curso_id>/asistencia/', views.asistencia_curso_api, name='asistencia_curso_api'),
     path('cursos/<int:curso_id>/asistencia/excel/', views.exportar_asistencia_excel_api, name='exportar_asistencia_excel_api'),
     path('mi-asistencia/', views.mi_asistencia_api, name='mi_asistencia_api'),
+    # Acta de notas (firma electrónica del docente y de la Dirección del INDI)
+    path('actas/', actas_api.actas_lista_api, name='actas_lista_api'),
+    path('cursos/<int:curso_id>/acta/', actas_api.acta_curso_api, name='acta_curso_api'),
+    path('cursos/<int:curso_id>/acta/accion/', actas_api.acta_accion_api, name='acta_accion_api'),
+    path('cursos/<int:curso_id>/acta/pdf/', actas_api.acta_pdf_api, name='acta_pdf_api'),
     path('reportes/resumen/', views.reporte_resumen_api, name='reporte_resumen_api'),
     path('reportes/ingresos/excel/', views.reporte_ingresos_excel_api, name='reporte_ingresos_excel_api'),
     path('reportes/matriculados/excel/', views.reporte_matriculados_excel_api, name='reporte_matriculados_excel_api'),

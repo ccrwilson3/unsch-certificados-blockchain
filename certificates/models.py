@@ -177,6 +177,11 @@ class Curso(models.Model):
         help_text="Faltas sin justificar que se toleran. La siguiente pone al estudiante en riesgo de desaprobar.",
     )
 
+    fecha_fin = models.DateField(
+        null=True, blank=True,
+        help_text="Fecha de culminación del curso. Desde aquí corre el plazo del docente para entregar el acta de notas.",
+    )
+
     activo = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -431,3 +436,71 @@ class Asistencia(models.Model):
 
     def __str__(self):
         return f"{self.curso_id} {self.estudiante_id} {self.fecha} {self.estado}"
+
+
+class ActaNotas(models.Model):
+    """
+    Acta de notas de un curso. El docente la firma al culminar el curso, el INDI la revisa y la firma
+    la Dirección del INDI; desde entonces queda bloqueada (las notas ya no se pueden cambiar).
+    Las firmas son electrónicas: cada una exige la contraseña de quien firma y queda registrada con fecha,
+    hora, IP y el hash (SHA-256) de las notas firmadas.
+    """
+
+    class Estado(models.TextChoices):
+        BORRADOR = 'BORRADOR', 'En elaboración (docente)'
+        FIRMADA_DOCENTE = 'FIRMADA_DOCENTE', 'Firmada por el docente (en revisión del INDI)'
+        OBSERVADA = 'OBSERVADA', 'Observada por el INDI'
+        REABIERTA = 'REABIERTA', 'Reabierta para corrección'
+        CERRADA = 'CERRADA', 'Firmada por la Dirección (cerrada)'
+
+    curso = models.OneToOneField(Curso, on_delete=models.CASCADE, related_name='acta')
+    estado = models.CharField(max_length=20, choices=Estado.choices, default=Estado.BORRADOR)
+    version = models.PositiveSmallIntegerField(default=1, help_text="Sube 1 cada vez que se reabre para corregir")
+    plazo_extra_dias = models.PositiveSmallIntegerField(default=0, help_text="Días que el INDI amplió el plazo del docente")
+
+    snapshot = models.JSONField(default=dict, blank=True, help_text="Copia de las notas tal como las firmó el docente")
+    hash_vigente = models.CharField(max_length=64, blank=True, default='', help_text="SHA-256 de las notas firmadas")
+
+    firmada_docente_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='actas_firmadas_docente')
+    firmada_docente_en = models.DateTimeField(null=True, blank=True)
+    firmada_direccion_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='actas_firmadas_direccion')
+    firmada_direccion_en = models.DateTimeField(null=True, blank=True)
+
+    creada = models.DateTimeField(auto_now_add=True)
+    actualizada = models.DateTimeField(auto_now=True)
+
+    @property
+    def codigo(self):
+        return f"ACTA-{self.curso.periodo}-{self.curso_id:04d}"
+
+    def __str__(self):
+        return f"{self.codigo} [{self.get_estado_display()}]"
+
+
+class ActaEvento(models.Model):
+    """Historial del acta: quién hizo qué y cuándo (firmas, observaciones, reaperturas, ampliaciones)."""
+
+    acta = models.ForeignKey(ActaNotas, on_delete=models.CASCADE, related_name='eventos')
+    accion = models.CharField(max_length=30)
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    comentario = models.TextField(blank=True, default='')
+    version = models.PositiveSmallIntegerField(default=1)
+    hash = models.CharField(max_length=64, blank=True, default='')
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    fecha = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['fecha', 'id']
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and not self.ip_address:
+            from .contexto import ip_actual
+            ip = ip_actual.get()
+            if ip:
+                self.ip_address = ip
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.acta.codigo} · {self.accion}"

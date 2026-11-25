@@ -259,7 +259,14 @@ PRIVATE_MEDIA_ROOT = BASE_DIR / 'private_media'
 
 # Días hábiles (lunes a viernes) que tiene el INDI, desde que el estudiante envía su voucher,
 # para entregar el certificado. Se cambia en .env con PLAZO_ENTREGA_DIAS_HABILES=4
+
 PLAZO_ENTREGA_DIAS_HABILES = int(os.getenv('PLAZO_ENTREGA_DIAS_HABILES', '4'))
+
+# Acta de notas: días que tiene el docente, desde la fecha de culminación del curso, para entregar el acta.
+PLAZO_ACTA_DIAS = int(os.getenv('PLAZO_ACTA_DIAS', '7'))
+# True = no se emiten certificados de cursos cuya acta no esté firmada por la Dirección del INDI.
+# Déjalo en False mientras haya cursos antiguos sin acta; actívalo cuando todo el flujo esté en uso.
+ACTA_OBLIGATORIA_PARA_CERTIFICADO = os.getenv('ACTA_OBLIGATORIA_PARA_CERTIFICADO', 'False').strip().lower() == 'true'
 
 # Feriados que no cuentan como días hábiles, separados por comas, en .env:
 # FERIADOS=2026-12-08,2026-12-09,2026-12-25

@@ -22,6 +22,7 @@ interface Curso {
   cupos?: number | null;
   cupos_ocupados?: number;
   faltas_permitidas?: number;
+  fecha_fin?: string | null;
 }
 
 interface Docente {
@@ -50,6 +51,7 @@ export default function GestionCursosINDI() {
   const [horaFin, setHoraFin] = useState('10:00');
   const [cupos, setCupos] = useState('');
   const [faltasPerm, setFaltasPerm] = useState('2');
+  const [fechaFin, setFechaFin] = useState('');
 
   // El horario se arma con un formato único para que el registro pueda agrupar los cursos
   const horarioArmado = `${dias} ${horaInicio} - ${horaFin}`;
@@ -63,6 +65,7 @@ export default function GestionCursosINDI() {
   const [editHorario, setEditHorario] = useState('');
   const [editCupos, setEditCupos] = useState('');
   const [editFaltas, setEditFaltas] = useState('2');
+  const [editFechaFin, setEditFechaFin] = useState('');
   const [errorEditar, setErrorEditar] = useState('');
   const [guardandoEdit, setGuardandoEdit] = useState(false);
 
@@ -127,6 +130,7 @@ export default function GestionCursosINDI() {
           docente_id: docenteId ? parseInt(docenteId) : null,
           cupos: cupos === '' ? null : parseInt(cupos),
           faltas_permitidas: parseInt(faltasPerm || '2'),
+          fecha_fin: fechaFin || null,
         }),
       });
 
@@ -135,6 +139,7 @@ export default function GestionCursosINDI() {
         setMensajeExito('¡Curso lanzado! Ya aparece en el registro y en la inscripción de los estudiantes.');
         setDocenteId('');
         setCupos('');
+        setFechaFin('');
         fetchCursos();
       } else {
         setError(data.message || 'Error al procesar la solicitud.');
@@ -154,6 +159,7 @@ export default function GestionCursosINDI() {
     setEditHorario(c.horario || '');
     setEditCupos(c.cupos != null ? String(c.cupos) : '');
     setEditFaltas(String(c.faltas_permitidas ?? 2));
+    setEditFechaFin(c.fecha_fin || '');
     setErrorEditar('');
   };
 
@@ -175,6 +181,7 @@ export default function GestionCursosINDI() {
           horario: editHorario,
           cupos: editCupos === '' ? null : parseInt(editCupos),
           faltas_permitidas: parseInt(editFaltas || '2'),
+          fecha_fin: editFechaFin || '',
         }),
       });
 
@@ -317,6 +324,15 @@ export default function GestionCursosINDI() {
               className="w-full p-2.5 border rounded-md text-sm"
             />
             <p className="text-xs text-gray-400 mt-1">La siguiente falta sin justificar pone al estudiante en riesgo de desaprobar.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de culminación</label>
+            <input
+              type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)}
+              className="w-full p-2.5 border rounded-md text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-1">Desde esta fecha corre el plazo del docente para entregar el acta de notas. Puedes completarla después.</p>
           </div>
 
           <div>
@@ -509,6 +525,15 @@ export default function GestionCursosINDI() {
                     className="w-full px-3.5 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Fecha de culminación del curso</label>
+                <input
+                  type="date" value={editFechaFin} onChange={(e) => setEditFechaFin(e.target.value)}
+                  className="w-full px-3.5 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="text-xs text-slate-400 mt-1">Desde esta fecha corre el plazo del docente para entregar el acta. Vacío = sin plazo.</p>
               </div>
 
               <div>

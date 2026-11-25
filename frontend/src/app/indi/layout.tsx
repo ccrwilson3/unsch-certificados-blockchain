@@ -1,12 +1,13 @@
 "use client";
 
 import AppShell, { type ItemNav } from "../../components/ui/AppShell";
-import { Inbox, BookOpen, ClipboardList, BarChart3 } from "lucide-react";
+import { Inbox, BookOpen, ClipboardList, BarChart3, FileSignature } from "lucide-react";
 
 const items: ItemNav[] = [
   { href: "/indi/aprobar-solicitudes", texto: "Bandeja de Solicitudes", Icono: Inbox },
   { href: "/indi/cursos", texto: "Gestión de Cursos", Icono: BookOpen },
   { href: "/indi/matriculas", texto: "Gestión de Matrículas", Icono: ClipboardList },
+  { href: "/indi/actas", texto: "Actas de Notas", Icono: FileSignature },
   { href: "/indi/reportes", texto: "Reportes", Icono: BarChart3 },
 ];
 

@@ -4,6 +4,8 @@ import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ClipboardList, Users } from "lucide-react";
+import ActaPanel from '../../../../components/ActaPanel';
+import type { ActaDatos } from '../../../../lib/actas';
 
 const API = 'http://127.0.0.1:8000/api';
 
@@ -41,6 +43,7 @@ function RegistroNotasContenido() {
   const cursoId = params?.cursoId as string;
 
   const [datos, setDatos] = useState<DatosNotas | null>(null);
+  const [acta, setActa] = useState<ActaDatos | null>(null);
   const [valores, setValores] = useState<Record<string, string>>({});
   const [original, setOriginal] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -54,6 +57,13 @@ function RegistroNotasContenido() {
 
   const cargar = async () => {
     try {
+      // Estado del acta (si está firmada o vencido el plazo, la tabla se muestra bloqueada)
+      try {
+        const resActa = await fetch(`${API}/cursos/${cursoId}/acta/`);
+        if (resActa.ok) setActa(await resActa.json());
+      } catch {
+        /* sin acta: se muestra la tabla igual */
+      }
       const res = await fetch(`${API}/cursos/${cursoId}/notas/`);
       const data = await res.json();
 
@@ -106,8 +116,10 @@ function RegistroNotasContenido() {
     return { acumulado: redondeado, promedio: completo ? redondeado : null };
   };
 
+  const editable = acta ? acta.editable : true;
+
   const handleGuardar = async () => {
-    if (!datos || !hayCambios) return;
+    if (!datos || !hayCambios || !editable) return;
     setMensaje(null);
 
     // Validación en la página (el servidor vuelve a validar)
@@ -178,6 +190,8 @@ function RegistroNotasContenido() {
           )}
         </div>
       </div>
+
+      {acta && <ActaPanel cursoId={cursoId} datos={acta} onCambio={cargar} />}
 
       {mensaje && (
         <div
@@ -276,8 +290,9 @@ function RegistroNotasContenido() {
                                 max="20"
                                 step="0.01"
                                 value={valores[k] ?? ''}
+                                disabled={!editable}
                                 onChange={(e) => setValores({ ...valores, [k]: e.target.value })}
-                                className={`w-20 p-1.5 text-center border rounded-md bg-white ${
+                                className={`w-20 p-1.5 text-center border rounded-md bg-white disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed ${
                                   modificada ? 'border-amber-400 bg-amber-50' : 'border-gray-200'
                                 }`}
                               />
@@ -309,13 +324,15 @@ function RegistroNotasContenido() {
 
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <p className="text-xs text-gray-500">
-              Nota mínima aprobatoria: {fmt(datos.nota_minima_aprobatoria)}. Deja una casilla vacía para borrar esa nota.
+              {editable
+                ? `Nota mínima aprobatoria: ${fmt(datos.nota_minima_aprobatoria)}. Deja una casilla vacía para borrar esa nota.`
+                : 'Las notas están bloqueadas: mira el estado del acta arriba.'}
             </p>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={descartarCambios}
-                disabled={!hayCambios || guardando}
+                disabled={!hayCambios || guardando || !editable}
                 className="px-4 py-2 border border-gray-200 bg-white text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition"
               >
                 Descartar cambios
@@ -323,7 +340,7 @@ function RegistroNotasContenido() {
               <button
                 type="button"
                 onClick={handleGuardar}
-                disabled={!hayCambios || guardando}
+                disabled={!hayCambios || guardando || !editable}
                 className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-md hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
               >
                 {guardando
