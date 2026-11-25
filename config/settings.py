@@ -268,6 +268,9 @@ PLAZO_ACTA_DIAS = int(os.getenv('PLAZO_ACTA_DIAS', '7'))
 # Déjalo en False mientras haya cursos antiguos sin acta; actívalo cuando todo el flujo esté en uso.
 ACTA_OBLIGATORIA_PARA_CERTIFICADO = os.getenv('ACTA_OBLIGATORIA_PARA_CERTIFICADO', 'False').strip().lower() == 'true'
 
+# True = al pagar el certificado el estudiante debe subir también su solicitud completada (modelo del INDI).
+SOLICITUD_FIRMADA_OBLIGATORIA = os.getenv('SOLICITUD_FIRMADA_OBLIGATORIA', 'True').strip().lower() == 'true'
+
 # Feriados que no cuentan como días hábiles, separados por comas, en .env:
 # FERIADOS=2026-12-08,2026-12-09,2026-12-25
 FERIADOS = [d.strip() for d in os.getenv('FERIADOS', '').split(',') if d.strip()]

@@ -22,6 +22,7 @@ interface Solicitud {
   monto?: number;
   numero_operacion?: string;
   tiene_voucher?: boolean;
+  tiene_solicitud_firmada?: boolean;
   pago_enviado_en?: string | null;
   pago_revisado_en?: string | null;
   comentarios_pago?: string;
@@ -146,6 +147,7 @@ export default function SolicitudesEstudiantePage() {
   // Formulario del voucher (por solicitud)
   const [numeros, setNumeros] = useState<Record<number, string>>({});
   const [archivos, setArchivos] = useState<Record<number, File | null>>({});
+  const [documentos, setDocumentos] = useState<Record<number, File | null>>({});
   const [enviandoPagoId, setEnviandoPagoId] = useState<number | null>(null);
   const [corrigiendoId, setCorrigiendoId] = useState<number | null>(null);
   const [cancelandoId, setCancelandoId] = useState<number | null>(null);
@@ -275,6 +277,16 @@ export default function SolicitudesEstudiantePage() {
       setMensaje({ tipo: "error", texto: "El archivo es demasiado grande (máximo 5 MB)." });
       return;
     }
+    const documento = documentos[id] || null;
+    const yaTiene = !!solicitudes.find((x) => x.id === id)?.tiene_solicitud_firmada;
+    if (!documento && !yaTiene) {
+      setMensaje({ tipo: "error", texto: "Adjunta tu solicitud completada. Descarga el modelo, complétalo y súbelo junto con tu voucher." });
+      return;
+    }
+    if (documento && documento.size > 5 * 1024 * 1024) {
+      setMensaje({ tipo: "error", texto: "La solicitud es demasiado grande (máximo 5 MB)." });
+      return;
+    }
 
     setEnviandoPagoId(id);
     setMensaje(null);
@@ -282,6 +294,7 @@ export default function SolicitudesEstudiantePage() {
     const formData = new FormData();
     formData.append("voucher_pago", archivo);
     formData.append("numero_operacion", numero);
+    if (documento) formData.append("solicitud_documento", documento);
 
     try {
       const res = await fetch(`${API_URL}/solicitudes/${id}/pago/`, { method: "POST", body: formData });
@@ -292,6 +305,7 @@ export default function SolicitudesEstudiantePage() {
         setCorrigiendoId(null);
         setNumeros((prev) => ({ ...prev, [id]: "" }));
         setArchivos((prev) => ({ ...prev, [id]: null }));
+        setDocumentos((prev) => ({ ...prev, [id]: null }));
         await cargarDatos();
       } else {
         setMensaje({ tipo: "error", texto: data.message || "No se pudo enviar el voucher." });
@@ -415,6 +429,34 @@ export default function SolicitudesEstudiantePage() {
   // Formulario para subir el voucher (se muestra cuando el estudiante debe pagar)
   const formularioVoucher = (s: Solicitud) => (
     <form onSubmit={(e) => handleEnviarVoucher(e, s.id)} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-semibold text-slate-700">Tu solicitud de certificado</p>
+            <p className="text-xs text-slate-500">
+              Descarga el modelo (ya viene con tus datos), completa los recuadros, fírmalo y súbelo aquí.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => abrirArchivo(`/solicitudes/${s.id}/formato-solicitud/`, "No se pudo abrir el modelo de solicitud.")}
+            className="px-3.5 py-2 border border-slate-200 bg-white text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-50 shrink-0"
+          >
+            <FileText className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Descargar modelo
+          </button>
+        </div>
+        <label className="block text-xs font-semibold text-slate-600">
+          Solicitud completada (PDF o foto, máx. 5 MB){s.tiene_solicitud_firmada ? " — ya subiste una; solo súbela de nuevo si quieres cambiarla" : ""}
+        </label>
+        <input
+          type="file"
+          accept="image/png,image/jpeg,application/pdf"
+          onChange={(e) =>
+            setDocumentos((prev) => ({ ...prev, [s.id]: e.target.files ? e.target.files[0] : null }))
+          }
+          className="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 bg-white border border-slate-200 rounded-xl p-1"
+        />
+      </div>
       <div>
         <label className="block text-xs font-semibold text-slate-600 mb-1">N° de operación del voucher</label>
         <input
@@ -726,9 +768,9 @@ export default function SolicitudesEstudiantePage() {
                           Siguiente paso: paga {soles(monto)} y sube tu voucher
                         </p>
                         <ol className="text-xs text-amber-800 mt-1 list-decimal list-inside space-y-0.5">
-                          <li>Descarga tu orden de pago.</li>
+                          <li>Descarga tu orden de pago y el modelo de solicitud (con tus datos).</li>
                           <li>Págala en un agente Interbank presentando tu DNI.</li>
-                          <li>Sube aquí la foto o el PDF de tu voucher y su número de operación.</li>
+                          <li>Sube aquí tu solicitud completada y la foto o el PDF de tu voucher con su número de operación.</li>
                         </ol>
                       </div>
                       <button

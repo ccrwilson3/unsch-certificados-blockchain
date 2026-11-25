@@ -30,6 +30,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from reportlab.pdfgen import canvas
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 
 from .models import (
@@ -583,6 +584,9 @@ def gestionar_solicitudes_estudiante(request):
                 "pago_enviado_en": s.pago_enviado_en.isoformat() if s.pago_enviado_en else None,
                 "pago_revisado_en": s.pago_revisado_en.isoformat() if s.pago_revisado_en else None,
                 "comentarios_pago": s.comentarios_pago or "",
+                "tiene_solicitud_firmada": bool(s.solicitud_documento),
+                "solicitud_autoverificada": bool(s.solicitud_autoverificada),
+                "solicitud_documento_en": s.solicitud_documento_en.isoformat() if s.solicitud_documento_en else None,
                 "certificado_enviado_en": s.certificado_enviado_en.isoformat() if s.certificado_enviado_en else None,
                 "fecha_limite": limite.isoformat() if limite else None,
                 "atrasada": bool(limite and hoy_peru() > limite),
@@ -3005,6 +3009,181 @@ def orden_pago_certificado_pdf(request, request_id):
     return response
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el propietario se validan dentro
+def formato_solicitud_certificado_pdf(request, request_id):
+    """
+    Modelo de solicitud de certificado, prellenado con los datos del trámite.
+    Los datos de identificación (nombre, DNI, curso, N° de solicitud) salen impresos y el estudiante solo
+    completa los campos editables (celular, correo, domicilio, motivo). Después lo sube junto con su voucher.
+    Solo lo puede descargar el estudiante dueño, el Personal INDI o el Admin.
+    """
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    solicitud = CertificateRequest.objects.select_related('student', 'curso').filter(id=request_id).first()
+    if solicitud is None:
+        return _error("Solicitud no encontrada.", status.HTTP_404_NOT_FOUND)
+    if solicitud.student_id != user.id and not es_personal_indi(user):
+        return _error("No tienes permiso para ver esta solicitud.", status.HTTP_403_FORBIDDEN)
+
+    est = solicitud.student
+    curso = solicitud.curso
+    dni = str(getattr(est, 'dni', None) or est.username)
+    nombre = f"{est.last_name.upper()}, {est.first_name.upper()}".strip(', ') or est.username
+    meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+    hoy = hoy_peru()
+    fecha_texto = f"Ayacucho, {hoy.day} de {meses[hoy.month - 1]} de {hoy.year}"
+
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    ancho, alto = letter
+    izq = 70
+
+    p.setFont("Helvetica-Bold", 12)
+    p.drawCentredString(ancho / 2, alto - 55, "UNIVERSIDAD NACIONAL DE SAN CRISTÓBAL DE HUAMANGA")
+    p.setFont("Helvetica", 10)
+    p.drawCentredString(ancho / 2, alto - 70, "Instituto de Idiomas — INDI")
+
+    p.setFont("Helvetica-Bold", 14)
+    p.drawCentredString(ancho / 2, alto - 108, "SOLICITUD DE CERTIFICADO DE IDIOMAS")
+    p.setFont("Helvetica-Bold", 10)
+    p.drawCentredString(ancho / 2, alto - 124, f"SOLICITUD N° {solicitud.id:05d}")
+
+    p.setFont("Helvetica", 10)
+    p.drawString(izq, alto - 160, "Señor(a) Director(a) del Instituto de Idiomas de la UNSCH")
+    p.drawString(izq, alto - 175, "Presente.-")
+
+    # Cuerpo de la solicitud (datos fijos)
+    texto = p.beginText(izq, alto - 205)
+    texto.setFont("Helvetica", 10)
+    texto.setLeading(15)
+    curso_txt = curso.nombre if curso else f"{idioma_legible(solicitud.language)} {nivel_legible(solicitud.level)}"
+    periodo = curso.periodo if curso else str(solicitud.anio or '')
+    for linea in (
+        f"Yo, {nombre}, identificado(a) con DNI N° {dni},",
+        f"estudiante del curso {curso_txt} ({idioma_legible(solicitud.language)} / "
+        f"{nivel_legible(solicitud.level)} - {solicitud.subnivel}), período {periodo},",
+        "solicito a usted la emisión de mi certificado de idiomas, para lo cual adjunto el",
+        f"voucher de pago por S/ {solicitud.monto if solicitud.monto else settings.PRECIO_CERTIFICADO:.2f}.",
+    ):
+        texto.textLine(linea)
+    p.drawText(texto)
+
+    # Campos que el estudiante completa
+    form = p.acroForm
+    p.setFont("Helvetica-Bold", 10)
+    p.drawString(izq, alto - 290, "Datos de contacto (completa o corrige):")
+    p.setFont("Helvetica", 10)
+    campos = [
+        ("celular", "Celular", (getattr(est, 'celular', '') or ''), 120),
+        ("correo", "Correo electrónico", (est.email or getattr(est, 'correo_institucional', '') or ''), 260),
+        ("domicilio", "Domicilio", "", 330),
+        ("motivo", "Motivo del trámite", "Obtención del certificado de idiomas", 330),
+    ]
+    y = alto - 318
+    for nombre_campo, etiqueta, valor, largo in campos:
+        p.drawString(izq, y + 5, f"{etiqueta}:")
+        form.textfield(
+            name=nombre_campo, tooltip=etiqueta, value=valor, x=izq + 130, y=y - 2, width=largo, height=18,
+            borderStyle='inset', borderColor=colors.HexColor('#64748b'), fillColor=colors.HexColor('#f8fafc'),
+            textColor=colors.black, forceBorder=True, fontSize=10,
+        )
+        y -= 30
+
+    p.drawString(izq, y - 15, fecha_texto)
+
+    # Firma
+    p.line(izq + 260, y - 85, izq + 450, y - 85)
+    p.setFont("Helvetica", 9)
+    p.drawCentredString(izq + 355, y - 98, "Firma del solicitante")
+    p.drawCentredString(izq + 355, y - 110, f"DNI {dni}")
+
+    # Indicaciones
+    y_nota = y - 150
+    p.setFont("Helvetica-Bold", 9)
+    p.drawString(izq, y_nota, "Cómo presentarla:")
+    p.setFont("Helvetica", 9)
+    for i, linea in enumerate((
+        "1. Completa los campos en recuadro (puedes hacerlo en tu lector de PDF) y firma.",
+        "2. Súbela en el sistema (Mis Solicitudes) junto con la foto o PDF de tu voucher de pago.",
+        "3. Si prefieres, imprímela, fírmala a mano y sube la foto o el escaneo.",
+        "El envío desde tu cuenta, con tu usuario y contraseña, queda registrado como tu presentación.",
+    )):
+        p.drawString(izq, y_nota - 15 * (i + 1), linea)
+
+    p.setFont("Helvetica", 8)
+    p.drawString(izq, 45, f"Documento generado por el sistema de certificados del INDI · Solicitud N° {solicitud.id:05d} · DNI {dni}")
+    p.showPage()
+    p.save()
+
+    buffer.seek(0)
+    respuesta = HttpResponse(buffer, content_type='application/pdf')
+    respuesta['Content-Disposition'] = f'inline; filename="Solicitud_Certificado_{solicitud.id:05d}.pdf"'
+    return respuesta
+
+
+def _revisar_solicitud_subida(archivo, solicitud):
+    """
+    Valida la solicitud completada que sube el estudiante.
+    Devuelve (autoverificada, error). Si es un PDF con texto, debe traer el N° de solicitud y el DNI del
+    estudiante (así se sabe que es el modelo de ESTE trámite). Un escaneo o foto no se puede leer: se acepta
+    y el INDI lo revisa a simple vista.
+    """
+    extension = os.path.splitext(archivo.name)[1].lower()
+    if extension not in EXTENSIONES_VOUCHER:
+        return False, "La solicitud debe ser un PDF o una imagen (JPG o PNG)."
+    if archivo.size > TAMANO_MAXIMO_VOUCHER:
+        return False, "La solicitud es demasiado grande (máximo 5 MB)."
+    if not _voucher_coincide_con_extension(archivo, extension):
+        return False, "El archivo de la solicitud no es un PDF o imagen válidos."
+    if extension != '.pdf':
+        return False, None
+
+    contenido = archivo.read()
+    archivo.seek(0)
+    try:
+        texto = _leer_texto_pdf(contenido)
+    except RuntimeError:
+        return False, None  # sin pypdf no se puede leer: se acepta y lo revisa el INDI
+    except ValueError as e:
+        return False, f"La solicitud no se pudo leer: {e}"
+
+    compacto = re.sub(r'\s+', '', texto)
+    if len(compacto) < 30:
+        return False, None  # escaneo sin texto
+    dni = str(getattr(solicitud.student, 'dni', None) or solicitud.student.username)
+    if f"{solicitud.id:05d}" not in compacto or dni not in compacto:
+        return False, (
+            f"Este documento no corresponde a tu solicitud N° {solicitud.id:05d}. "
+            "Descarga el modelo desde esta pantalla, complétalo y vuelve a subirlo."
+        )
+    return True, None
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # la autenticación y el propietario se validan dentro
+def ver_solicitud_certificado_api(request, request_id):
+    """Entrega la solicitud completada. Solo el estudiante dueño, el Personal INDI o el Admin."""
+    user, error = exigir_usuario(request)
+    if error:
+        return error
+
+    solicitud = CertificateRequest.objects.filter(id=request_id).first()
+    if solicitud is None or not solicitud.solicitud_documento:
+        return Response({'message': 'No hay solicitud firmada para este trámite.'}, status=404)
+    if solicitud.student_id != user.id and not es_personal_indi(user):
+        return _error("No tienes permiso para ver este documento.", status.HTTP_403_FORBIDDEN)
+
+    nombre = solicitud.solicitud_documento.name
+    tipo = mimetypes.guess_type(nombre)[0] or 'application/octet-stream'
+    respuesta = FileResponse(solicitud.solicitud_documento.open('rb'), content_type=tipo)
+    respuesta['Content-Disposition'] = f'inline; filename="{os.path.basename(nombre)}"'
+    respuesta['Cache-Control'] = 'private, no-store'
+    return respuesta
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])  # la autenticación y el propietario se validan dentro
 def subir_pago_certificado_api(request, request_id):
@@ -3062,12 +3241,36 @@ def subir_pago_certificado_api(request, request_id):
     if en_uso:
         return _error("Ese número de operación ya fue usado en otra solicitud.", status.HTTP_400_BAD_REQUEST)
 
+    # Solicitud completada (el modelo que descargó): obligatoria la primera vez; al corregir el voucher
+    # no hace falta volver a subirla si ya está.
+    documento = request.FILES.get('solicitud_documento')
+    autoverificada = solicitud.solicitud_autoverificada
+    if documento is not None:
+        autoverificada, problema = _revisar_solicitud_subida(documento, solicitud)
+        if problema:
+            return _error(problema, status.HTTP_400_BAD_REQUEST)
+    elif not solicitud.solicitud_documento and getattr(settings, 'SOLICITUD_FIRMADA_OBLIGATORIA', True):
+        return _error(
+            "Debes adjuntar tu solicitud completada. Descarga el modelo en esta pantalla, complétalo y súbelo "
+            "junto con tu voucher.",
+            status.HTTP_400_BAD_REQUEST
+        )
+
     # Si había un voucher anterior (observado), se reemplaza
     if solicitud.voucher_pago:
         solicitud.voucher_pago.delete(save=False)
     solicitud.voucher_pago.save(
         f"solicitud-{solicitud.id}-{uuid.uuid4().hex[:8]}{extension}", archivo, save=False
     )
+    if documento is not None:
+        if solicitud.solicitud_documento:
+            solicitud.solicitud_documento.delete(save=False)
+        ext_doc = os.path.splitext(documento.name)[1].lower()
+        solicitud.solicitud_documento.save(
+            f"modelo-{solicitud.id}-{uuid.uuid4().hex[:8]}{ext_doc}", documento, save=False
+        )
+        solicitud.solicitud_documento_en = timezone.now()
+        solicitud.solicitud_autoverificada = autoverificada
 
     solicitud.numero_operacion = numero
     solicitud.pago_enviado_en = timezone.now()
@@ -3115,11 +3318,12 @@ def cancelar_solicitud_certificado_api(request, request_id):
         )
 
     nombre = solicitud.curso.nombre if solicitud.curso else 'certificado'
-    if solicitud.voucher_pago:
-        try:
-            solicitud.voucher_pago.delete(save=False)
-        except Exception:
-            pass
+    for campo_archivo in (solicitud.voucher_pago, solicitud.solicitud_documento):
+        if campo_archivo:
+            try:
+                campo_archivo.delete(save=False)
+            except Exception:
+                pass
     registrar_auditoria(
         user, "CANCELACIÓN DE SOLICITUD DE CERTIFICADO",
         f"El estudiante {user.username} canceló su solicitud #{solicitud.id} ({nombre})."

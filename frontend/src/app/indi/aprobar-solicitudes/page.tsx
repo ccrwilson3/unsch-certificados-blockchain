@@ -23,6 +23,8 @@ interface Solicitud {
   monto?: number;
   numero_operacion?: string;
   tiene_voucher?: boolean;
+  tiene_solicitud_firmada?: boolean;
+  solicitud_autoverificada?: boolean;
   pago_enviado_en?: string | null;
   pago_revisado_en?: string | null;
   comentarios_pago?: string;
@@ -126,15 +128,15 @@ export default function AprobarSolicitudesPage() {
     router.push("/login");
   };
 
-  // Abre el voucher (archivo protegido) en una pestaña nueva
-  const verVoucher = async (id: number) => {
+  // Abre el voucher o la solicitud completada (archivos protegidos) en una pestaña nueva
+  const verVoucher = async (id: number, ruta: "voucher" | "documento" = "voucher") => {
     const ventana = window.open("", "_blank");
     try {
-      const res = await fetch(`${API_URL}/solicitudes/${id}/voucher/`);
+      const res = await fetch(`${API_URL}/solicitudes/${id}/${ruta}/`);
       if (!res.ok) {
         ventana?.close();
         const data = await res.json().catch(() => ({}));
-        setMensaje({ tipo: "error", texto: data.message || "No se pudo abrir el voucher." });
+        setMensaje({ tipo: "error", texto: data.message || "No se pudo abrir el archivo." });
         return;
       }
       const blob = await res.blob();
@@ -482,6 +484,25 @@ export default function AprobarSolicitudesPage() {
                               >
                                 Ver voucher
                               </button>
+                            )}
+                            {s.tiene_voucher && (
+                              <div className="mt-1.5 pt-1.5 border-t border-slate-100">
+                                {s.tiene_solicitud_firmada ? (
+                                  <>
+                                    <span className={s.solicitud_autoverificada ? "text-emerald-700 font-semibold" : "text-amber-700 font-semibold"}>
+                                      {s.solicitud_autoverificada ? "Solicitud verificada" : "Solicitud: revísala a simple vista"}
+                                    </span>
+                                    <button
+                                      onClick={() => verVoucher(s.id, "documento")}
+                                      className="ml-2 text-blue-600 hover:underline font-semibold"
+                                    >
+                                      Ver solicitud
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-slate-400">Sin solicitud adjunta</span>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="p-4">

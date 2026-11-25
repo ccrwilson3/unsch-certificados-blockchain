@@ -348,6 +348,20 @@ class CertificateRequest(models.Model):
     )
     pago_revisado_en = models.DateTimeField(null=True, blank=True)
     comentarios_pago = models.TextField(blank=True, null=True, help_text="Motivo de la observación del pago")
+
+    # ---- Solicitud firmada (modelo que el estudiante descarga, completa y sube junto con el voucher) ----
+    solicitud_documento = models.FileField(
+        storage=almacenamiento_privado,
+        upload_to='solicitudes_certificados/',
+        blank=True,
+        null=True,
+        help_text="Solicitud completada por el estudiante (PDF o foto). Archivo privado.",
+    )
+    solicitud_documento_en = models.DateTimeField(null=True, blank=True)
+    solicitud_autoverificada = models.BooleanField(
+        default=False,
+        help_text="El sistema leyó el PDF y comprobó que trae el N° de solicitud y el DNI del estudiante",
+    )
     certificado_enviado_en = models.DateTimeField(
         null=True, blank=True, help_text="Cuándo se envió el certificado por correo al estudiante"
     )
