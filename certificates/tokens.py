@@ -5,7 +5,7 @@ El token se crea al iniciar sesión y se envía en cada petición como:
     Authorization: Bearer <token>
 
 Está firmado con la SECRET_KEY de Django: nadie puede fabricar uno sin conocerla,
-y vence solo a las 12 horas. No necesita tablas nuevas en la base de datos.
+vence a las 12 horas y deja de valer si el usuario cambia su contraseña. No necesita tablas nuevas en la base de datos.
 """
 from django.contrib.auth import get_user_model
 from django.core import signing
@@ -15,9 +15,14 @@ SALT = "certificates.tokens"
 DURACION_SEGUNDOS = 12 * 60 * 60  # 12 horas
 
 
+def _huella_password(user):
+    """Fragmento de la contraseña cifrada: al cambiarla, los tokens anteriores dejan de valer."""
+    return (user.password or "")[-12:]
+
+
 def crear_token(user):
     """Genera un token firmado para el usuario."""
-    return signing.dumps({"uid": user.id}, salt=SALT)
+    return signing.dumps({"uid": user.id, "pw": _huella_password(user)}, salt=SALT)
 
 
 def usuario_desde_token(token):
@@ -28,7 +33,11 @@ def usuario_desde_token(token):
         return None
 
     User = get_user_model()
-    return User.objects.filter(id=datos.get("uid"), is_active=True).first()
+    usuario = User.objects.filter(id=datos.get("uid"), is_active=True).first()
+    # Si la contraseña cambió (cambio o restablecimiento), el token anterior queda invalidado
+    if usuario is None or datos.get("pw") != _huella_password(usuario):
+        return None
+    return usuario
 
 
 class BearerTokenAuthentication(BaseAuthentication):

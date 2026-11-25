@@ -1,0 +1,13 @@
+Django==6.1.3
+djangorestframework==3.18.3
+django-cors-headers==4.9.0
+python-dotenv==1.2.3
+web3==8.0.0
+reportlab==5.0.1
+qrcode==8.2
+pillow==12.3.0
+openpyxl==3.1.5
+pypdf>=6.0
+# Solo en producción con PostgreSQL:
+# psycopg[binary]>=3.2
+# gunicorn>=23.0

@@ -131,6 +131,7 @@ export default function CuentaDialog({
       });
       const d = await res.json();
       if (res.ok) {
+        if (d.token) localStorage.setItem("token", d.token);
         setAvisoPass({ tipo: "exito", texto: d.message });
         setActual("");
         setNueva("");

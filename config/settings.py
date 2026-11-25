@@ -7,6 +7,8 @@ de la raíz del proyecto. Ese archivo NO se sube a git.
 
 import os
 from decimal import Decimal
+
+from django.core.exceptions import ImproperlyConfigured
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,10 +22,19 @@ load_dotenv(BASE_DIR / '.env')
 
 # SECURITY WARNING: keep the secret key used in production secret!
 # Se define en .env como DJANGO_SECRET_KEY. El valor de abajo es solo un respaldo para desarrollo.
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-solo-para-desarrollo-local')
+_CLAVE_DESARROLLO = 'django-insecure-solo-para-desarrollo-local'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', _CLAVE_DESARROLLO)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DJANGO_DEBUG', 'True').strip().lower() == 'true'
+
+# En producción (DEBUG=False) NO se permite arrancar con la clave de desarrollo:
+# con ella cualquiera podría fabricar tokens de sesión válidos.
+if not DEBUG and (SECRET_KEY == _CLAVE_DESARROLLO or len(SECRET_KEY) < 40):
+    raise ImproperlyConfigured(
+        "Con DJANGO_DEBUG=False debes definir en .env una DJANGO_SECRET_KEY propia de al menos 40 caracteres. "
+        "Puedes generar una con: python -c \"from django.core.management.utils import get_random_secret_key as g; print(g())\""
+    )
 
 # Lista separada por comas, por ejemplo: localhost,127.0.0.1,192.168.100.32
 # Por defecto '*' (igual que antes). Al publicar el sistema, restringir en .env.
@@ -77,12 +88,38 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # Es la misma base de datos SQLite de siempre (archivo unsch_cert_db en la raíz),
 # ahora con ruta absoluta para que no dependa de la carpeta desde donde se ejecute Django.
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'unsch_cert_db',
+# Si en .env existe DB_NAME se usa PostgreSQL (recomendado en producción; requiere: pip install psycopg[binary]).
+# Si no, se usa SQLite como siempre.
+if os.getenv('DB_NAME'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME'),
+            'USER': os.getenv('DB_USER', ''),
+            'PASSWORD': os.getenv('DB_PASSWORD', ''),
+            'HOST': os.getenv('DB_HOST', 'localhost'),
+            'PORT': os.getenv('DB_PORT', '5432'),
+            'CONN_MAX_AGE': 60,
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'unsch_cert_db',
+        }
+    }
+
+# Los límites de intentos (login, recuperar contraseña, etc.) cuentan en la caché.
+# Con un solo proceso basta la memoria local; con varios procesos (gunicorn) usar la base de datos:
+# DJANGO_CACHE_EN_BD=True y luego:  python manage.py createcachetable
+if os.getenv('DJANGO_CACHE_EN_BD', 'False').strip().lower() == 'true':
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'cache_limites',
+        }
+    }
 
 
 # Password validation
@@ -105,7 +142,8 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Hora de Perú: las fechas de asistencia, reportes y correos se cuentan por día local (la base guarda UTC).
+TIME_ZONE = 'America/Lima'
 
 USE_I18N = True
 
@@ -136,17 +174,30 @@ CORS_ALLOW_CREDENTIALS = True
 AUTH_USER_MODEL = 'certificates.User'
 
 # Permitir explícitamente el origen del frontend con credenciales
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://192.168.100.32:3000",
-]
+# En producción, definir en .env los orígenes reales separados por comas:
+# CORS_ORIGINS=https://certificados.indi.unsch.edu.pe
+_ORIGENES_DEFECTO = "http://localhost:3000,http://127.0.0.1:3000,http://192.168.100.32:3000"
+CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv('CORS_ORIGINS', _ORIGENES_DEFECTO).split(',') if o.strip()]
+CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS)
 
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://192.168.100.32:3000",
-]
+# ==========================================================
+# SEGURIDAD EN PRODUCCIÓN (solo se activa con DJANGO_DEBUG=False)
+# ==========================================================
+
+# True si el sistema está detrás de un proxy (nginx) que ya maneja HTTPS: se confía en sus cabeceras.
+CONFIAR_EN_PROXY = os.getenv('CONFIAR_EN_PROXY', 'False').strip().lower() == 'true'
+
+if not DEBUG:
+    SECURE_SSL_REDIRECT = os.getenv('FORZAR_HTTPS', 'True').strip().lower() == 'true'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.getenv('HSTS_SEGUNDOS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = 'same-origin'
+    X_FRAME_OPTIONS = 'DENY'
+    if CONFIAR_EN_PROXY:
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 CORS_ALLOW_HEADERS = [
     'accept',

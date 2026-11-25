@@ -198,6 +198,12 @@ def consultar_logs_auditoria(request):
 TAMANO_MAXIMO_PDF_VERIFICAR = 5 * 1024 * 1024
 
 
+def _es_personal_verificador(request):
+    """True si quien consulta es personal autenticado (INDI, Admin o Grados y Títulos)."""
+    u = usuario_actual(request)
+    return bool(u and (es_personal_indi(u) or rol_de(u) == 'GRADOS_TITULOS'))
+
+
 def _normalizar_texto(valor):
     """Mayúsculas, sin tildes y con espacios simples: para comparar el texto del PDF con la base de datos."""
     valor = unicodedata.normalize('NFKD', str(valor or ''))
@@ -239,6 +245,9 @@ def verificar_certificado_pdf_api(request):
     Veredictos: AUTENTICO, REVOCADO, ALTERADO, SIN_CONFIRMAR (no se pudo consultar la blockchain)
     o NO_RECONOCIDO.
     """
+    limite = _limitar_uso(request, 'verificar_pdf', 40, 600)
+    if limite:
+        return limite
     archivo = request.FILES.get('pdf_file')
     if archivo is None:
         return Response({"existe": False, "veredicto": "NO_RECONOCIDO", "mensaje": "No se ha adjuntado ningún archivo PDF."}, status=400)
@@ -336,7 +345,9 @@ def verificar_certificado_pdf_api(request):
         "is_valid": veredicto == "AUTENTICO",
         "codigo": certificado.certificate_code,
         "estudiante": estudiante.get_full_name() or estudiante.username,
-        "dni": getattr(estudiante, 'dni', None) or estudiante.username,
+        "dni": (lambda d: d if _es_personal_verificador(request) else (d[:2] + '*' * max(len(d) - 4, 0) + d[-2:] if len(d) > 4 else '****'))(
+            str(getattr(estudiante, 'dni', None) or estudiante.username)
+        ),
         "idioma": obtener_nombre_idioma(certificado.language),
         "nivel": certificado.get_level_display(),
         "subnivel": certificado.subnivel or 'Nivel I',
@@ -358,12 +369,24 @@ def verificar_certificado_publico(request, certificate_code):
     Busca el certificado por código, DNI o QR y contrasta su estado con la blockchain.
     Ya no se inventan datos: si no existe certificado oficial, se informa que no existe.
     """
+    limite = _limitar_uso(request, 'verificar', 120, 600)
+    if limite:
+        return limite
+
     clean_code = certificate_code.strip()
+
+    # Solo el personal autenticado (INDI, Admin, Grados y Títulos) puede buscar por DNI y ver el DNI completo.
+    # Al público se le pide el código del certificado y el DNI se muestra enmascarado (Ley 29733).
+    solicitante = usuario_actual(request)
+    es_personal = bool(solicitante and (es_personal_indi(solicitante) or rol_de(solicitante) == 'GRADOS_TITULOS'))
 
     match_clean = re.search(r'INDI-\d{4}-[A-Z]{2,4}-\d+', clean_code, re.IGNORECASE)
     if match_clean:
         search_code = match_clean.group(0).upper()
         certificate = Certificate.objects.filter(certificate_code__iexact=search_code).first()
+    elif not es_personal:
+        certificate = None
+        search_code = clean_code
     else:
         search_code = re.sub(r'^(REGISTRO|C[OÓ]DIGO|DNI)[:\s]*', '', clean_code, flags=re.IGNORECASE).strip().upper()
         certificate = Certificate.objects.filter(
@@ -376,7 +399,8 @@ def verificar_certificado_publico(request, certificate_code):
         contexto = {
             'existe': False,
             'is_valid': False,
-            'mensaje': 'El código o DNI ingresado no registra un certificado oficial en el INDI - UNSCH.'
+            'mensaje': ('El código o DNI ingresado no registra un certificado oficial en el INDI - UNSCH.' if es_personal
+                        else 'El código ingresado no registra un certificado oficial en el INDI - UNSCH.')
         }
     else:
         # 1. ¿Los datos guardados siguen coincidiendo con el hash registrado?
@@ -401,7 +425,9 @@ def verificar_certificado_publico(request, certificate_code):
             'is_valid': is_valid,
             'codigo': certificate.certificate_code,
             'estudiante': certificate.student.get_full_name() or certificate.student.username,
-            'dni': getattr(certificate.student, 'dni', None) or 'No registrado',
+            'dni': (lambda d: d if es_personal else (d[:2] + '*' * max(len(d) - 4, 0) + d[-2:] if len(d) > 4 else '****'))(
+                str(getattr(certificate.student, 'dni', None) or certificate.student.username or '')
+            ),
             'idioma': idioma_texto,
             'nivel': certificate.get_level_display(),
             'subnivel': getattr(certificate, 'subnivel', None) or 'Nivel I',
@@ -890,6 +916,63 @@ def revocar_certificado(request, certificate_code):
 
 
 # ==========================================================
+# LÍMITE DE INTENTOS (contra adivinar contraseñas y abusar de endpoints públicos)
+# ==========================================================
+
+def _ip_cliente(request):
+    """IP del visitante. Detrás de un proxy (nginx) se usa X-Forwarded-For."""
+    reenviada = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if reenviada and getattr(settings, 'CONFIAR_EN_PROXY', False):
+        return reenviada.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', 'desconocida')
+
+
+def _limitar_uso(request, nombre, maximo, ventana_segundos):
+    """
+    Cuenta cada llamada a un endpoint público. Si se pasa del máximo en la ventana de tiempo,
+    devuelve una respuesta 429; si no, None.
+    """
+    clave = f"limite:{nombre}:{_ip_cliente(request)}"
+    cache.add(clave, 0, ventana_segundos)
+    try:
+        cuenta = cache.incr(clave)
+    except ValueError:
+        cache.set(clave, 1, ventana_segundos)
+        cuenta = 1
+    if cuenta > maximo:
+        return _error("Demasiadas solicitudes. Espera unos minutos e intenta de nuevo.", status.HTTP_429_TOO_MANY_REQUESTS)
+    return None
+
+
+LOGIN_MAX_FALLOS = 5            # por DNI + IP
+LOGIN_MAX_FALLOS_IP = 30        # por IP, sea cual sea el DNI
+LOGIN_BLOQUEO_SEGUNDOS = 15 * 60
+
+
+def _claves_login(request, username):
+    ip = _ip_cliente(request)
+    return f"login_fallos:{str(username).lower()}:{ip}", f"login_fallos_ip:{ip}"
+
+
+def _login_bloqueado(request, username):
+    k_user, k_ip = _claves_login(request, username)
+    return (cache.get(k_user, 0) >= LOGIN_MAX_FALLOS) or (cache.get(k_ip, 0) >= LOGIN_MAX_FALLOS_IP)
+
+
+def _login_registrar_fallo(request, username):
+    for clave in _claves_login(request, username):
+        cache.add(clave, 0, LOGIN_BLOQUEO_SEGUNDOS)
+        try:
+            cache.incr(clave)
+        except ValueError:
+            cache.set(clave, 1, LOGIN_BLOQUEO_SEGUNDOS)
+
+
+def _login_limpiar(request, username):
+    cache.delete(_claves_login(request, username)[0])
+
+
+# ==========================================================
 # LOGIN
 # ==========================================================
 
@@ -902,11 +985,17 @@ def login_view(request):
     if not username or not password:
         return Response({"detail": "Usuario y contraseña son requeridos."}, status=400)
 
+    if _login_bloqueado(request, username):
+        return Response({
+            "detail": "Demasiados intentos fallidos. Espera 15 minutos o usa «¿Olvidaste tu contraseña?»."
+        }, status=429)
+
     user = authenticate(username=username, password=password)
 
     if user is not None:
         if not user.is_active:
             return Response({"detail": "La cuenta se encuentra inactiva."}, status=403)
+        _login_limpiar(request, username)
 
         # 1. Obtener el rol guardado en la base de datos (si existe)
         db_role = getattr(user, 'role', None)
@@ -916,11 +1005,8 @@ def login_view(request):
             role = "ADMIN"
         elif db_role and db_role != "":
             role = db_role
-        elif "indi" in username.lower():
-            role = "INDI"
-        elif "grados" in username.lower() or "gt" in username.lower():
-            role = "GRADOS_TITULOS"
         else:
+            # Sin rol guardado: perfil mínimo (estudiante). El rol nunca se deduce del nombre de usuario.
             role = "ESTUDIANTE"
 
         return Response({
@@ -931,6 +1017,7 @@ def login_view(request):
             "token": crear_token(user),  # token firmado (antes era el DNI)
         }, status=200)
     else:
+        _login_registrar_fallo(request, username)
         return Response({"detail": "Credenciales inválidas."}, status=400)
 
 
@@ -1474,6 +1561,9 @@ def aprobar_matricula_api(request, matricula_id):
 @permission_classes([AllowAny])
 def registrarse_y_generar_orden(request):
     """Registro público de un nuevo estudiante con su orden de pago. Devuelve la sesión ya iniciada."""
+    limite = _limitar_uso(request, 'registro', 30, 3600)
+    if limite:
+        return limite
     data = request.data
     username = str(data.get('username') or '').strip()  # DNI
     password = str(data.get('password') or '')
@@ -1885,7 +1975,8 @@ def cambiar_password_api(request):
     user.set_password(nueva)
     user.save(update_fields=['password'])
     registrar_auditoria(user, "CAMBIO DE CONTRASEÑA", f"El usuario {user.username} cambió su contraseña.")
-    return Response({"status": "success", "message": "Contraseña actualizada correctamente."})
+    # El token anterior deja de valer al cambiar la contraseña: se entrega uno nuevo para no sacar al usuario
+    return Response({"status": "success", "message": "Contraseña actualizada correctamente.", "token": crear_token(user)})
 
 
 # ==========================================================
@@ -3394,7 +3485,11 @@ def olvide_password_api(request):
     """
     Pide un enlace para crear una contraseña nueva. Recibe el DNI (o el correo personal).
     SIEMPRE responde lo mismo, exista o no la cuenta, para no revelar quién está registrado.
+    Límite: 10 pedidos por hora desde una misma IP (evita inundar de correos a una persona).
     """
+    limite = _limitar_uso(request, 'olvide', 10, 3600)
+    if limite:
+        return limite
     respuesta = Response({
         "status": "success",
         "message": "Si los datos coinciden con una cuenta, enviamos un enlace al correo personal registrado. "

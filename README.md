@@ -1,57 +1,48 @@
-# Sample Hardhat 3 Project (`node:test` and `viem`)
+# Sistema de Certificados con Blockchain – INDI UNSCH
 
-This project showcases a Hardhat 3 project using the native Node.js test runner (`node:test`) and the `viem` library for Ethereum interactions.
+Gestión de matrícula, clases, notas, asistencia y certificados del Instituto de Idiomas.
+Solo el *hash* del certificado se guarda en blockchain; los datos personales quedan en la base de datos.
 
-To learn more about Hardhat 3, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3](https://hardhat.org/hardhat3-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+## Requisitos
+Python 3.12+, Node 20+, Ganache (red local) y Git.
 
-## Project Overview
-
-This example project includes:
-
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using [`node:test`](nodejs.org/api/test.html), the new Node.js native test runner, and [`viem`](https://viem.sh/).
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
-
-## Usage
-
-### Running Tests
-
-To run all the tests in the project, execute the following command:
-
-```shell
-npx hardhat test
+## Instalación (desarrollo)
 ```
-
-You can also selectively run the Solidity or `node:test` tests:
-
-```shell
-npx hardhat test solidity
-npx hardhat test nodejs
+python -m venv venv
+source venv/Scripts/activate
+pip install -r requirements.txt
+cp .env.example .env
+python manage.py migrate
+python manage.py runserver 0.0.0.0:8000
 ```
-
-### Make a deployment to Sepolia
-
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
-
-To run the deployment to a local chain:
-
-```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
+Frontend:
 ```
-
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
-
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
-
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
-
-```shell
-npx hardhat keystore set SEPOLIA_PRIVATE_KEY
+cd frontend
+npm install
+npm run dev
 ```
+`frontend/.env.local` debe tener `NEXT_PUBLIC_API_URL=http://<IP-del-servidor>:8000/api`.
 
-After setting the variable, you can run the deployment with the Sepolia network:
+## Flujo general
+Matrícula → pago (voucher Interbank) → clases, notas y asistencia → solicitud de certificado (S/ 20)
+→ pago → emisión en blockchain → verificación pública (código o PDF) → revocación si corresponde.
 
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
-```
+## Roles
+| Rol | Qué hace |
+|---|---|
+| Estudiante | Matricularse, subir voucher, ver notas/asistencia/materiales, solicitar certificado |
+| Docente | Pasar asistencia, registrar notas, subir materiales |
+| INDI | Cursos, cupos, matrículas, pagos, reportes Excel, ampliar reservas |
+| Grados y Títulos | Validar requisitos, emitir y revocar certificados |
+| Administrador | Usuarios y auditoría |
+
+## Reglas del INDI configuradas
+- Reserva de matrícula: 5 días desde la orden (INDI puede ampliar).
+- Asistencia: 2 faltas toleradas; a la 3ª injustificada se avisa de posible desaprobación.
+- Certificado: S/ 20; plazo de entrega en días hábiles (`PLAZO_ENTREGA_DIAS_HABILES`).
+
+## Pruebas
+Revisar `Auditoria_Seguridad_INDI.xlsx` (casos de prueba y matriz de accesos).
+
+## Puesta en producción
+Ver `docs/PRODUCCION.md`.
