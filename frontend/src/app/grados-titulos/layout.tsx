@@ -1,10 +1,11 @@
 "use client";
 
 import AppShell, { type ItemNav } from "../../components/ui/AppShell";
-import { BadgeCheck } from "lucide-react";
+import { BadgeCheck, FileSignature } from "lucide-react";
 
 const items: ItemNav[] = [
   { href: "/grados-titulos/validar-requisitos", texto: "Validar requisitos", Icono: BadgeCheck },
+  { href: "/grados-titulos/actas", texto: "Actas de Notas", Icono: FileSignature },
 ];
 
 export default function GradosTitulosLayout({ children }: { children: React.ReactNode }) {
