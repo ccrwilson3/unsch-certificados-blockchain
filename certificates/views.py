@@ -35,10 +35,11 @@ from reportlab.lib.pagesizes import letter
 
 from .models import (
     Certificate, CertificateRequest, AuditLog, Curso, Matricula,
-    Evaluacion, Calificacion, SolicitudMatricula, Material, Asistencia, ActaNotas,
+    Evaluacion, Calificacion, SolicitudMatricula, Material, Asistencia, ActaNotas, DobleFactor,
 )
 from .utils import generar_pdf_certificado
 from . import actas as acta_logica
+from . import doble_factor
 from .blockchain import (
     consultar_certificado_blockchain, emitir_hash_blockchain,
     revocar_hash_blockchain, BlockchainError,
@@ -1050,6 +1051,25 @@ def _resolver_identificador(identificador):
     return candidatos[0] if len(candidatos) == 1 else None
 
 
+def _respuesta_login(user):
+    """Datos que recibe el navegador cuando el ingreso quedó completo (contraseña y, si aplica, 2FA)."""
+    db_role = getattr(user, 'role', None)
+    if user.is_superuser:
+        role = "ADMIN"
+    elif db_role and db_role != "":
+        role = db_role
+    else:
+        # Sin rol guardado: perfil mínimo (estudiante). El rol nunca se deduce del nombre de usuario.
+        role = "ESTUDIANTE"
+    return {
+        "username": user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "role": role,
+        "token": crear_token(user),  # token firmado
+    }
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login_view(request):
@@ -1075,27 +1095,18 @@ def login_view(request):
         if not user.is_active:
             return Response({"detail": "La cuenta se encuentra inactiva."}, status=403)
         _login_limpiar(request, username)
+
+        # Verificación en dos pasos: con la contraseña correcta aún NO se entrega la sesión.
+        if doble_factor.tiene_2fa(user):
+            return Response({"requiere_2fa": True, "token_2fa": doble_factor.crear_token_2fa(user, 'verificar')}, status=200)
+        if doble_factor.es_obligatorio_para(user):
+            return Response({
+                "requiere_configurar_2fa": True,
+                "token_2fa": doble_factor.crear_token_2fa(user, 'configurar'),
+            }, status=200)
+
         registrar_auditoria(user, "INICIO DE SESIÓN", "Ingreso al sistema.")
-
-        # 1. Obtener el rol guardado en la base de datos (si existe)
-        db_role = getattr(user, 'role', None)
-
-        # 2. Asignación inteligente de rol
-        if user.is_superuser:
-            role = "ADMIN"
-        elif db_role and db_role != "":
-            role = db_role
-        else:
-            # Sin rol guardado: perfil mínimo (estudiante). El rol nunca se deduce del nombre de usuario.
-            role = "ESTUDIANTE"
-
-        return Response({
-            "username": user.username,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "role": role,
-            "token": crear_token(user),  # token firmado (antes era el DNI)
-        }, status=200)
+        return Response(_respuesta_login(user), status=200)
     else:
         _login_registrar_fallo(request, username)
         registrar_auditoria(None, "INTENTO FALLIDO DE ACCESO", f"Credenciales inválidas para: {escrito[:60]}")
@@ -1118,6 +1129,7 @@ def gestionar_usuarios_api(request):
 
     if request.method == 'GET':
         usuarios = User.objects.all().order_by('-id')
+        con_2fa = set(DobleFactor.objects.filter(activo=True).values_list('user_id', flat=True))
         data = []
         for u in usuarios:
             nombre_completo = f"{u.last_name}, {u.first_name}".strip(", ") if (u.last_name or u.first_name) else u.username
@@ -1135,7 +1147,8 @@ def gestionar_usuarios_api(request):
                 "nombre_completo": nombre_completo,
                 "email": u.email or "",
                 "role": rol,
-                "is_active": u.is_active
+                "is_active": u.is_active,
+                "tiene_2fa": u.id in con_2fa,
             })
         return Response(data, status=status.HTTP_200_OK)
 

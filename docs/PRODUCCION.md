@@ -10,6 +10,11 @@
 6. Eliminar usuarios de demostración y cambiar contraseñas de las cuentas reales.
 7. Blockchain: usar una red definitiva (no Ganache local) y guardar la clave privada solo en `.env`.
 
+## Verificación en dos pasos
+Activa `DOBLE_FACTOR_OBLIGATORIO=True` en `.env`: Administrador, INDI y Grados y Títulos deberán configurarla en su próximo ingreso (se cambian los roles con `DOBLE_FACTOR_ROLES`).
+Cada persona debe tener su app autenticadora configurada **antes** de la puesta en marcha. Si el único administrador pierde su celular:
+`python manage.py reset_2fa <usuario>`
+
 ## Respaldos
 Diario: `pg_dump unsch_cert > respaldo_$(date +%F).sql` y copia de `private_media/` (vouchers y materiales).
 Probar la restauración al menos una vez.

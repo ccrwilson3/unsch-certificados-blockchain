@@ -518,3 +518,18 @@ class ActaEvento(models.Model):
 
     def __str__(self):
         return f"{self.acta.codigo} · {self.accion}"
+
+
+class DobleFactor(models.Model):
+    """Verificación en dos pasos (app autenticadora). Una por usuario; solo cuenta cuando está activa."""
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='doble_factor')
+    secreto = models.CharField(max_length=32)
+    activo = models.BooleanField(default=False)
+    confirmado_en = models.DateTimeField(null=True, blank=True)
+    ultimo_paso = models.BigIntegerField(default=0, help_text="Último código usado (impide reutilizarlo)")
+    codigos_respaldo = models.JSONField(default=list, blank=True, help_text="Huellas de los códigos de respaldo sin usar")
+    creado = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"2FA de {self.user} ({'activo' if self.activo else 'sin confirmar'})"

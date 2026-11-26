@@ -271,6 +271,11 @@ ACTA_OBLIGATORIA_PARA_CERTIFICADO = os.getenv('ACTA_OBLIGATORIA_PARA_CERTIFICADO
 # True = al pagar el certificado el estudiante debe subir también su solicitud completada (modelo del INDI).
 SOLICITUD_FIRMADA_OBLIGATORIA = os.getenv('SOLICITUD_FIRMADA_OBLIGATORIA', 'True').strip().lower() == 'true'
 
+# Verificación en dos pasos (app autenticadora). Cualquier usuario puede activarla desde "Mi cuenta".
+# Con DOBLE_FACTOR_OBLIGATORIO=True, los roles de DOBLE_FACTOR_ROLES no pueden entrar sin activarla.
+DOBLE_FACTOR_OBLIGATORIO = os.getenv('DOBLE_FACTOR_OBLIGATORIO', 'False').strip().lower() == 'true'
+DOBLE_FACTOR_ROLES = tuple(r.strip().upper() for r in os.getenv('DOBLE_FACTOR_ROLES', 'ADMIN,INDI,GRADOS_TITULOS').split(',') if r.strip())
+
 # Feriados que no cuentan como días hábiles, separados por comas, en .env:
 # FERIADOS=2026-12-08,2026-12-09,2026-12-25
 FERIADOS = [d.strip() for d in os.getenv('FERIADOS', '').split(',') if d.strip()]

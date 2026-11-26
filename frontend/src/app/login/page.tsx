@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import DosPasosLogin from "../../components/DosPasosLogin";
 import { useRouter } from "next/navigation";
 
 type Modo = "dni" | "correo" | "usuario";
@@ -47,6 +48,9 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
+  // Segundo paso del ingreso (verificación en dos pasos)
+  const [dosPasos, setDosPasos] = useState<{ modo: "verificar" | "configurar"; token: string } | null>(null);
 
   // Cargar el historial y el último modo usado (solo en el navegador)
   useEffect(() => {
@@ -83,6 +87,42 @@ export default function LoginPage() {
     guardarRecientes([]);
   };
 
+  // Guarda la sesión y entra a la pantalla que corresponde al rol
+  const finalizarLogin = (data: any) => {
+    // Recordar este acceso en el historial (el más reciente primero, sin repetidos)
+    const nombre = `${data.first_name || ""} ${data.last_name || ""}`.trim();
+    const nuevo: Reciente = { modo, valor: username, nombre };
+    guardarRecientes([nuevo, ...recientes.filter((x) => !(x.modo === modo && x.valor === username))].slice(0, MAX_RECIENTES));
+    try {
+      localStorage.setItem("login_modo", modo);
+    } catch {
+      /* ignorar */
+    }
+
+    // Guardamos la sesión localmente
+    // (los códigos de respaldo se mostraron una vez y NO se guardan en el navegador)
+    const { codigos_respaldo, codigos_restantes, token_2fa, ...sesion } = data;
+    void codigos_respaldo; void codigos_restantes; void token_2fa;
+    localStorage.setItem("token", sesion.token);
+    localStorage.setItem("user", JSON.stringify(sesion));
+
+    // Normalizar el rol a mayúsculas
+    const role = (data.role || "").toUpperCase();
+
+    // Redirección Dinámica alineada con tus carpetas reales en Next.js
+    if (role === "ADMIN") {
+      router.push("/admin/usuarios");
+    } else if (role === "INDI") {
+      router.push("/indi/aprobar-solicitudes"); // Ruta exacta según tu imagen
+    } else if (role === "GRADOS_TITULOS") {
+      router.push("/grados-titulos/validar-requisitos"); // Ruta exacta según tu imagen
+    } else if (role == 'DOCENTE') {
+      router.push('/docente/cursos');
+    } else {
+      router.push("/estudiante/solicitudes"); // Ruta exacta según tu imagen
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -94,8 +134,6 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
-      
       const res = await fetch(`${apiUrl}/login/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -109,35 +147,16 @@ export default function LoginPage() {
         return;
       }
 
-      // Recordar este acceso en el historial (el más reciente primero, sin repetidos)
-      const nombre = `${data.first_name || ""} ${data.last_name || ""}`.trim();
-      const nuevo: Reciente = { modo, valor: username, nombre };
-      guardarRecientes([nuevo, ...recientes.filter((x) => !(x.modo === modo && x.valor === username))].slice(0, MAX_RECIENTES));
-      try {
-        localStorage.setItem("login_modo", modo);
-      } catch {
-        /* ignorar */
+      if (data.requiere_2fa) {
+        setDosPasos({ modo: "verificar", token: data.token_2fa });
+        return;
+      }
+      if (data.requiere_configurar_2fa) {
+        setDosPasos({ modo: "configurar", token: data.token_2fa });
+        return;
       }
 
-      // Guardamos la sesión localmente
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data));
-
-      // Normalizar el rol a mayúsculas
-      const role = (data.role || "").toUpperCase();
-
-      // Redirección Dinámica alineada con tus carpetas reales en Next.js
-      if (role === "ADMIN") {
-        router.push("/admin/usuarios");
-      } else if (role === "INDI") {
-        router.push("/indi/aprobar-solicitudes"); // Ruta exacta según tu imagen
-      } else if (role === "GRADOS_TITULOS") {
-        router.push("/grados-titulos/validar-requisitos"); // Ruta exacta según tu imagen
-      } else if (role == 'DOCENTE') {
-        router.push('/docente/cursos');
-      } else {
-        router.push("/estudiante/solicitudes"); // Ruta exacta según tu imagen
-      }
+      finalizarLogin(data);
     } catch (err) {
       setError("Error al conectar con el servidor de autenticación.");
     } finally {
@@ -167,6 +186,16 @@ export default function LoginPage() {
           </div>
         )}
 
+        {dosPasos ? (
+          <DosPasosLogin
+            modo={dosPasos.modo}
+            token={dosPasos.token}
+            apiUrl={apiUrl}
+            onCompleto={finalizarLogin}
+            onVolver={() => { setDosPasos(null); setPassword(""); setError(""); }}
+          />
+        ) : (
+        <>
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1.5">Ingresar con</label>
@@ -292,6 +321,8 @@ export default function LoginPage() {
               ))}
             </ul>
           </div>
+        )}
+        </>
         )}
 
         <div className="mt-6 text-center border-t border-slate-100 pt-4">

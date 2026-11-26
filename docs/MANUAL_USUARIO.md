@@ -33,6 +33,15 @@
 ## Verificación pública
 Cualquier persona puede verificar un certificado por **código** o **subiendo el PDF** en la página de verificación.
 
+## Verificación en dos pasos (2FA)
+Cualquier usuario puede activarla en **Mi cuenta → Seguridad**:
+1. Instala una app autenticadora en el celular (Google Authenticator, Microsoft Authenticator o Authy).
+2. Escanea el código QR y escribe el código de 6 dígitos que muestra la app.
+3. Guarda los **códigos de respaldo** (se muestran una sola vez; cada uno sirve una vez si pierdes el celular).
+
+Desde entonces, al ingresar se pide la contraseña y luego el código de la app. En producción es **obligatoria** para Administrador, INDI y Grados y Títulos.
+Si un usuario pierde su celular y sus códigos de respaldo, el Administrador usa **Quitar 2FA** en *Usuarios*; el usuario lo configura de nuevo al ingresar.
+
 ## Seguridad
 - Tras 5 intentos fallidos de ingreso, la cuenta se bloquea 15 minutos.
 - Al cambiar la contraseña se cierran las demás sesiones.

@@ -2,11 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Eye, EyeOff, KeyRound, Loader2, UserCircle, X } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Loader2, ShieldCheck, UserCircle, X } from "lucide-react";
+import SeguridadDosPasos from "./SeguridadDosPasos";
 import { API_URL } from "../../lib/abrirArchivo";
 import { ETIQUETAS_ROL } from "../../lib/sesion";
 
-type Pestana = "datos" | "password";
+type Pestana = "datos" | "password" | "seguridad";
 type Aviso = { tipo: "exito" | "error"; texto: string } | null;
 
 interface Perfil {
@@ -190,6 +191,7 @@ export default function CuentaDialog({
           {[
             { clave: "datos" as Pestana, texto: "Mis datos", Icono: UserCircle },
             { clave: "password" as Pestana, texto: "Contraseña", Icono: KeyRound },
+            { clave: "seguridad" as Pestana, texto: "Seguridad", Icono: ShieldCheck },
           ].map(({ clave, texto, Icono }) => (
             <button
               key={clave}
@@ -289,6 +291,8 @@ export default function CuentaDialog({
                 </div>
               </form>
             )
+          ) : pestana === "seguridad" ? (
+            <SeguridadDosPasos />
           ) : (
             <form onSubmit={cambiarPassword} className="space-y-4">
               <div>

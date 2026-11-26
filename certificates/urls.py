@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views, actas_api
+from . import views, actas_api, doble_factor_api
 from .views import login_view
 
 urlpatterns = [
@@ -31,6 +31,16 @@ urlpatterns = [
     path('usuarios/', views.gestionar_usuarios_api, name='gestionar_usuarios_api'),
     path('usuarios/<int:user_id>/toggle/', views.toggle_estado_usuario_api, name='toggle_estado_usuario'),
     path('usuarios/<int:user_id>/reset-password/', views.resetear_password_api, name='resetear_password'),
+    # Verificación en dos pasos (2FA)
+    path('usuarios/<int:user_id>/reset-2fa/', doble_factor_api.resetear_2fa_admin_api, name='resetear_2fa_admin_api'),
+    path('auth/2fa/verificar/', doble_factor_api.verificar_2fa_login_api, name='verificar_2fa_login_api'),
+    path('auth/2fa/configurar/iniciar/', doble_factor_api.configurar_2fa_login_iniciar_api, name='configurar_2fa_login_iniciar_api'),
+    path('auth/2fa/configurar/confirmar/', doble_factor_api.configurar_2fa_login_confirmar_api, name='configurar_2fa_login_confirmar_api'),
+    path('2fa/estado/', doble_factor_api.estado_2fa_api, name='estado_2fa_api'),
+    path('2fa/activar/iniciar/', doble_factor_api.activar_2fa_iniciar_api, name='activar_2fa_iniciar_api'),
+    path('2fa/activar/confirmar/', doble_factor_api.activar_2fa_confirmar_api, name='activar_2fa_confirmar_api'),
+    path('2fa/desactivar/', doble_factor_api.desactivar_2fa_api, name='desactivar_2fa_api'),
+    path('2fa/codigos/', doble_factor_api.regenerar_codigos_2fa_api, name='regenerar_codigos_2fa_api'),
 
     path('verificar-pdf/', views.verificar_certificado_pdf_api, name='verificar_certificado_pdf_api'),
 

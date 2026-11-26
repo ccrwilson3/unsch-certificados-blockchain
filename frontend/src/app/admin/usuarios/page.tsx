@@ -155,6 +155,23 @@ export default function AdminUsuariosPage() {
     }
   };
 
+  // Quitar la verificación en dos pasos (por ejemplo, si el usuario perdió su celular)
+  const handleReset2fa = async (u: any) => {
+    if (!window.confirm(`¿Quitar la verificación en dos pasos de ${u.username}? Podrá configurarla de nuevo en su próximo ingreso.`)) return;
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
+      const res = await fetch(`${apiUrl}/usuarios/${u.id}/reset-2fa/`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.alert(data.message || "No se pudo quitar la verificación en dos pasos.");
+        return;
+      }
+      fetchUsuarios();
+    } catch {
+      window.alert("Error de conexión con el servidor.");
+    }
+  };
+
   // Resetear Contraseña
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -263,6 +280,11 @@ export default function AdminUsuariosPage() {
                       }`}>
                         {u.role}
                       </span>
+                      {u.tiene_2fa && (
+                        <span title="Tiene verificación en dos pasos" className="ml-1.5 px-2 py-1 text-[10px] font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          2FA
+                        </span>
+                      )}
                     </td>
                     <td className="p-4">
                       <span className={`font-medium text-xs px-2.5 py-1 rounded-full ${u.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
@@ -285,6 +307,14 @@ export default function AdminUsuariosPage() {
                       >
                         <KeyRound className="w-3 h-3 inline-block -mt-0.5 mr-1" />Clave
                       </button>
+                      {u.tiene_2fa && (
+                        <button
+                          onClick={() => handleReset2fa(u)}
+                          className="px-2.5 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-xs font-medium transition-colors border border-indigo-200"
+                        >
+                          Quitar 2FA
+                        </button>
+                      )}
                       <button
                         onClick={() => handleToggleEstado(u.id)}
                         className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
