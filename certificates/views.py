@@ -35,7 +35,7 @@ from reportlab.lib.pagesizes import letter
 
 from .models import (
     Certificate, CertificateRequest, AuditLog, Curso, Matricula,
-    Evaluacion, Calificacion, SolicitudMatricula, Material, Asistencia, ActaNotas, DobleFactor,
+    Evaluacion, Calificacion, SolicitudMatricula, Material, Asistencia, ActaNotas, DobleFactor, PermisosUsuario,
 )
 from .utils import generar_pdf_certificado
 from . import actas as acta_logica
@@ -55,6 +55,8 @@ User = get_user_model()
 # que reconoce BearerTokenAuthentication (ver certificates/tokens.py).
 # Ya no se acepta el DNI como token.
 # ==========================================================
+
+from . import permisos as _permisos_modulo
 
 ROLES_ESTUDIANTE = ('STUDENT', 'ESTUDIANTE')
 
@@ -93,6 +95,10 @@ def exigir_usuario(request):
     user = usuario_actual(request)
     if user is None:
         return None, _error("No autorizado. Inicie sesión nuevamente.", status.HTTP_401_UNAUTHORIZED)
+    # Permisos por módulo (Fase 14): se comprueban aquí para cubrir todos los endpoints protegidos.
+    motivo = _permisos_modulo.motivo_de_bloqueo(request, user)
+    if motivo:
+        return None, _error(motivo, status.HTTP_403_FORBIDDEN)
     return user, None
 
 
@@ -1130,6 +1136,9 @@ def gestionar_usuarios_api(request):
     if request.method == 'GET':
         usuarios = User.objects.all().order_by('-id')
         con_2fa = set(DobleFactor.objects.filter(activo=True).values_list('user_id', flat=True))
+        perfiles_usuario = {
+            r.user_id: r for r in PermisosUsuario.objects.select_related('perfil')
+        }
         data = []
         for u in usuarios:
             nombre_completo = f"{u.last_name}, {u.first_name}".strip(", ") if (u.last_name or u.first_name) else u.username
@@ -1149,6 +1158,8 @@ def gestionar_usuarios_api(request):
                 "role": rol,
                 "is_active": u.is_active,
                 "tiene_2fa": u.id in con_2fa,
+                "perfil_permisos": (perfiles_usuario[u.id].perfil.nombre if u.id in perfiles_usuario and perfiles_usuario[u.id].perfil_id else ""),
+                "permisos_personalizados": bool(u.id in perfiles_usuario and (perfiles_usuario[u.id].excepciones or perfiles_usuario[u.id].perfil_id)),
             })
         return Response(data, status=status.HTTP_200_OK)
 

@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views, actas_api, doble_factor_api
+from . import views, actas_api, doble_factor_api, permisos_api
 from .views import login_view
 
 urlpatterns = [
@@ -41,6 +41,14 @@ urlpatterns = [
     path('2fa/activar/confirmar/', doble_factor_api.activar_2fa_confirmar_api, name='activar_2fa_confirmar_api'),
     path('2fa/desactivar/', doble_factor_api.desactivar_2fa_api, name='desactivar_2fa_api'),
     path('2fa/codigos/', doble_factor_api.regenerar_codigos_2fa_api, name='regenerar_codigos_2fa_api'),
+
+    # Permisos por módulo (por usuario y plantillas)
+    path('mis-permisos/', permisos_api.mis_permisos_api, name='mis_permisos_api'),
+    path('permisos/catalogo/', permisos_api.catalogo_permisos_api, name='catalogo_permisos_api'),
+    path('permisos/plantillas/', permisos_api.perfiles_permisos_api, name='perfiles_permisos_api'),
+    path('permisos/plantillas/<int:perfil_id>/', permisos_api.perfil_permisos_detalle_api, name='perfil_permisos_detalle_api'),
+    path('permisos/plantillas/<int:perfil_id>/asignar/', permisos_api.perfil_permisos_asignar_api, name='perfil_permisos_asignar_api'),
+    path('usuarios/<int:user_id>/permisos/', permisos_api.permisos_usuario_api, name='permisos_usuario_api'),
 
     path('verificar-pdf/', views.verificar_certificado_pdf_api, name='verificar_certificado_pdf_api'),
 

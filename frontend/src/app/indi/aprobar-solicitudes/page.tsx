@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Paginador from "../../../components/ui/Paginador";
+import { usePermisos } from "../../../lib/permisos";
 import { Ban, FileText, Inbox, Mail, X } from "lucide-react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
@@ -76,6 +77,8 @@ const fecha = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString()
 const fechaSolo = (iso?: string | null) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString() : "");
 
 export default function AprobarSolicitudesPage() {
+  const { puedeEditar } = usePermisos();
+  const puedeRevocar = puedeEditar("revocaciones");
   const router = useRouter();
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [loading, setLoading] = useState(true);
@@ -607,12 +610,12 @@ export default function AprobarSolicitudesPage() {
                                     >
                                       <Mail className="w-4 h-4 inline-block -mt-0.5 mr-1.5" />Reenviar correo
                                     </button>
-                                    <button
+                                    {puedeRevocar && <button
                                       onClick={() => revocar(s.certificate_code as string)}
                                       className="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold hover:bg-rose-100 transition-colors"
                                     >
                                       Revocar
-                                    </button>
+                                    </button>}
                                   </>
                                 ))}
 

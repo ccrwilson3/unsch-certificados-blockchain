@@ -42,6 +42,22 @@ Cualquier usuario puede activarla en **Mi cuenta → Seguridad**:
 Desde entonces, al ingresar se pide la contraseña y luego el código de la app. En producción es **obligatoria** para Administrador, INDI y Grados y Títulos.
 Si un usuario pierde su celular y sus códigos de respaldo, el Administrador usa **Quitar 2FA** en *Usuarios*; el usuario lo configura de nuevo al ingresar.
 
+## Permisos por módulo (Administrador)
+
+Cada rol ya trae sus módulos. Para que una persona vea **menos** que el resto de su rol (por ejemplo, un trabajador del INDI que solo atiende matrículas):
+
+1. En **Usuarios**, pulsa **Permisos** junto a la persona (disponible para Personal INDI, Docente y Grados y Títulos).
+2. Para cada módulo elige: **Rol** (lo que ya da su rol), **Sin acceso**, **Solo ver** o **Ver y editar**. Debajo se muestra el *Resultado*.
+3. Guarda. Se aplica **de inmediato**, sin que la persona tenga que volver a ingresar.
+
+Para varias personas a la vez, usa **Permisos** en el menú lateral: crea una *plantilla* (por ejemplo «INDI solo matrículas») y pulsa **Asignar** para elegir a quiénes se aplica. Si editas la plantilla, el cambio llega a todos los que la tienen. Un ajuste propio de una persona siempre prevalece sobre su plantilla.
+
+Notas:
+- Con **Solo ver** la persona consulta, pero el sistema rechaza cualquier cambio y le avisa que su acceso es de lectura.
+- **Revocar certificados** es un módulo aparte, para poder dar la bandeja de solicitudes sin permitir revocar.
+- El Administrador nunca se restringe, y los estudiantes no usan módulos.
+- Cada cambio queda en la **Auditoría** (quién, a quién y qué accesos cambiaron).
+
 ## Seguridad
 - Tras 5 intentos fallidos de ingreso, la cuenta se bloquea 15 minutos.
 - Al cambiar la contraseña se cierran las demás sesiones.

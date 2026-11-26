@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
-  ChevronDown, ExternalLink, GraduationCap, KeyRound, LogOut, Menu, ShieldCheck, UserCircle, X,
+  ChevronDown, ExternalLink, GraduationCap, KeyRound, Lock, LogOut, Menu, ShieldCheck, UserCircle, X,
   type LucideIcon,
 } from "lucide-react";
+import { PermisosProvider, usePermisos } from "../../lib/permisos";
 import CuentaDialog from "./CuentaDialog";
 import {
   ETIQUETAS_ROL, cerrarSesion, iniciales, leerUsuario, nombreCompleto, type UsuarioSesion,
@@ -16,6 +17,8 @@ export interface ItemNav {
   href: string;
   texto: string;
   Icono: LucideIcon;
+  /** Módulo de permisos que da acceso a esta página. Sin módulo, la ven todos los de ese portal. */
+  modulo?: string;
 }
 
 type Color = "indigo" | "amber" | "emerald" | "violet" | "rose";
@@ -170,11 +173,45 @@ function MenuUsuario({ usuario, color }: { usuario: UsuarioSesion | null; color:
   );
 }
 
-/**
- * Estructura común de los 5 portales: menú lateral + barra superior con el menú de cuenta.
- * En pantallas pequeñas el menú lateral se abre como cajón con el botón de hamburguesa.
- */
-export default function AppShell({
+function SinAcceso({ items }: { items: ItemNav[] }) {
+  const alternativa = items[0];
+  return (
+    <div className="p-8 max-w-lg mx-auto text-center">
+      <span className="inline-flex w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 items-center justify-center"><Lock className="w-6 h-6" /></span>
+      <h1 className="text-lg font-bold text-slate-800 mt-4">No tienes acceso a este módulo</h1>
+      <p className="text-sm text-slate-500 mt-1">
+        El administrador no lo ha habilitado para tu usuario. Si lo necesitas, pídeselo.
+      </p>
+      {alternativa && (
+        <Link href={alternativa.href} className="inline-block mt-5 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-semibold">
+          Ir a «{alternativa.texto}»
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/** Impide abrir por la dirección un módulo sin acceso y avisa cuando el acceso es solo de lectura. */
+function GuardaRuta({ todos, visibles, children }: { todos: ItemNav[]; visibles: ItemNav[]; children: React.ReactNode }) {
+  const pathname = usePathname();
+  const permisos = usePermisos();
+  const actual = todos.find((i) => pathname.startsWith(i.href));
+  if (!permisos.cargado) return null;
+  if (actual?.modulo && !permisos.puedeVer(actual.modulo)) return <SinAcceso items={visibles} />;
+  const soloLectura = !!actual?.modulo && permisos.nivel(actual.modulo) === "VER" && permisos.maximos[actual.modulo] === "EDITAR";
+  return (
+    <>
+      {soloLectura && (
+        <div role="status" className="mx-4 sm:mx-8 mt-4 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium">
+          <Lock className="w-4 h-4 shrink-0" /> Tienes acceso de solo lectura en este módulo: puedes consultar, pero no modificar.
+        </div>
+      )}
+      {children}
+    </>
+  );
+}
+
+function ShellInterno({
   items, titulo, subtitulo, color, children,
 }: {
   items: ItemNav[];
@@ -185,6 +222,9 @@ export default function AppShell({
 }) {
   const [usuario, setUsuario] = useState<UsuarioSesion | null>(null);
   const [cajon, setCajon] = useState(false);
+  const permisos = usePermisos();
+  // Mientras se consulta, los módulos con permiso no se muestran para evitar un parpadeo de enlaces vedados.
+  const visibles = items.filter((i) => !i.modulo || (permisos.cargado && permisos.puedeVer(i.modulo)));
 
   useEffect(() => {
     setUsuario(leerUsuario());
@@ -194,7 +234,7 @@ export default function AppShell({
     <div className="min-h-screen bg-slate-50 flex">
       {/* Menú lateral fijo (escritorio) */}
       <aside className="hidden lg:block w-64 shrink-0 bg-slate-900 text-white border-r border-slate-800 sticky top-0 h-screen">
-        <MenuLateral items={items} titulo={titulo} subtitulo={subtitulo} color={color} />
+        <MenuLateral items={visibles} titulo={titulo} subtitulo={subtitulo} color={color} />
       </aside>
 
       {/* Cajón (móvil) */}
@@ -209,7 +249,7 @@ export default function AppShell({
             >
               <X className="w-5 h-5" />
             </button>
-            <MenuLateral items={items} titulo={titulo} subtitulo={subtitulo} color={color} alNavegar={() => setCajon(false)} />
+            <MenuLateral items={visibles} titulo={titulo} subtitulo={subtitulo} color={color} alNavegar={() => setCajon(false)} />
           </div>
           <div className="flex-1 bg-slate-900/50" onClick={() => setCajon(false)} />
         </div>
@@ -229,8 +269,31 @@ export default function AppShell({
           <MenuUsuario usuario={usuario} color={color} />
         </header>
 
-        <main className="flex-1 min-w-0">{children}</main>
+        <main className="flex-1 min-w-0">
+          <Suspense fallback={null}>
+            <GuardaRuta todos={items} visibles={visibles}>{children}</GuardaRuta>
+          </Suspense>
+        </main>
       </div>
     </div>
+  );
+}
+
+/**
+ * Estructura común de los 5 portales: menú lateral + barra superior con el menú de cuenta.
+ * En pantallas pequeñas el menú lateral se abre como cajón con el botón de hamburguesa.
+ * Filtra el menú y protege las páginas según los permisos por módulo del usuario.
+ */
+export default function AppShell(props: {
+  items: ItemNav[];
+  titulo: string;
+  subtitulo: string;
+  color: Color;
+  children: React.ReactNode;
+}) {
+  return (
+    <PermisosProvider>
+      <ShellInterno {...props} />
+    </PermisosProvider>
   );
 }

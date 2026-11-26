@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import Paginador from "../../../components/ui/Paginador";
-import { Dices, KeyRound, Pencil } from "lucide-react";
+import { Dices, KeyRound, Pencil, ShieldCheck } from "lucide-react";
+import PermisosUsuarioDialog from "../../../components/ui/PermisosUsuarioDialog";
 
 export default function AdminUsuariosPage() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
@@ -31,6 +32,10 @@ export default function AdminUsuariosPage() {
   const [editRol, setEditRol] = useState("ESTUDIANTE");
   const [errorEditar, setErrorEditar] = useState("");
   const [guardandoEdit, setGuardandoEdit] = useState(false);
+
+  // Permisos por módulo
+  const [permisosDeId, setPermisosDeId] = useState<number | null>(null);
+  const ROLES_CON_MODULOS = ["INDI", "DOCENTE", "GRADOS_TITULOS"];
 
   // Modal Resetear Contraseña
   const [modalResetAbierto, setModalResetAbierto] = useState(false);
@@ -280,6 +285,11 @@ export default function AdminUsuariosPage() {
                       }`}>
                         {u.role}
                       </span>
+                      {u.permisos_personalizados && (
+                        <span title={u.perfil_permisos ? `Plantilla: ${u.perfil_permisos}` : "Permisos ajustados para este usuario"} className="ml-1.5 px-2 py-1 text-[10px] font-bold rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                          {u.perfil_permisos || "Permisos propios"}
+                        </span>
+                      )}
                       {u.tiene_2fa && (
                         <span title="Tiene verificación en dos pasos" className="ml-1.5 px-2 py-1 text-[10px] font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                           2FA
@@ -298,6 +308,14 @@ export default function AdminUsuariosPage() {
                       >
                         <Pencil className="w-3 h-3 inline-block -mt-0.5 mr-1" />Editar rol
                       </button>
+                      {ROLES_CON_MODULOS.includes(u.role) && (
+                        <button
+                          onClick={() => setPermisosDeId(u.id)}
+                          className="px-2.5 py-1 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg text-xs font-medium transition-colors border border-purple-200"
+                        >
+                          <ShieldCheck className="w-3 h-3 inline-block -mt-0.5 mr-1" />Permisos
+                        </button>
+                      )}
                       <button
                         onClick={() => {
                           setUsuarioSeleccionado(u);
@@ -334,6 +352,10 @@ export default function AdminUsuariosPage() {
 
           <Paginador pg={pg} />
         </div>
+      )}
+
+      {permisosDeId !== null && (
+        <PermisosUsuarioDialog usuarioId={permisosDeId} onCerrar={() => setPermisosDeId(null)} onGuardado={fetchUsuarios} />
       )}
 
       {/* MODAL REGISTRAR USUARIO */}

@@ -15,6 +15,12 @@ Activa `DOBLE_FACTOR_OBLIGATORIO=True` en `.env`: Administrador, INDI y Grados y
 Cada persona debe tener su app autenticadora configurada **antes** de la puesta en marcha. Si el único administrador pierde su celular:
 `python manage.py reset_2fa <usuario>`
 
+## Permisos por módulo
+
+Al crear un usuario nuevo funciona de inmediato con los módulos de su rol. Antes de entregar el sistema, define con el INDI qué personas necesitan acceso reducido y crea sus plantillas en **Permisos**. Los permisos se comprueban en el servidor en cada petición (no solo se ocultan menús).
+
+Para agregar un módulo nuevo al sistema: añádelo a `MODULOS` y sus rutas a `RUTAS_MODULO` en `certificates/permisos.py`; aparece solo en la pantalla del administrador.
+
 ## Respaldos
 Diario: `pg_dump unsch_cert > respaldo_$(date +%F).sql` y copia de `private_media/` (vouchers y materiales).
 Probar la restauración al menos una vez.

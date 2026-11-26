@@ -533,3 +533,35 @@ class DobleFactor(models.Model):
 
     def __str__(self):
         return f"2FA de {self.user} ({'activo' if self.activo else 'sin confirmar'})"
+
+
+class PerfilPermisos(models.Model):
+    """
+    Plantilla reutilizable de permisos por módulo (ej. «INDI solo matrícula»).
+    'permisos' guarda solo lo que se cambia respecto a los módulos que ya da el rol:
+    {"cursos": "VER", "reportes": "NINGUNO"}. Lo que no aparece se queda como lo da el rol.
+    """
+
+    nombre = models.CharField(max_length=80, unique=True)
+    descripcion = models.CharField(max_length=200, blank=True, default='')
+    rol = models.CharField(max_length=20, help_text="Rol al que se aplica la plantilla")
+    permisos = models.JSONField(default=dict, blank=True)
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['rol', 'nombre']
+
+    def __str__(self):
+        return f"{self.nombre} ({self.rol})"
+
+
+class PermisosUsuario(models.Model):
+    """Permisos por módulo de un usuario: plantilla opcional + excepciones propias."""
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='permisos_modulos')
+    perfil = models.ForeignKey(PerfilPermisos, null=True, blank=True, on_delete=models.SET_NULL, related_name='usuarios')
+    excepciones = models.JSONField(default=dict, blank=True)
+    actualizado = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Permisos de {self.user}"
